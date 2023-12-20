@@ -38,6 +38,11 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/matchmake", post(matchmake::matchmake))
         .route("/power_card", post(power_card::update_card))
         .route("/power_card/insert", post(power_card::insert_card))
+        .route(
+            "/power_card/warlords_domain",
+            post(power_card::warlords_domain),
+        )
+        .route("/power_card/twist_of_fate", post(power_card::twist_of_fate))
         .layer(CorsLayer::permissive())
         .with_state(pool);
 

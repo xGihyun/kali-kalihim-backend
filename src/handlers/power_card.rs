@@ -21,7 +21,7 @@ fn get_random_cards(amount: usize) -> Vec<String> {
         "Double-edged Sword".to_string(),
         "Extra Wind".to_string(),
         "Twist of Fate".to_string(),
-        "Viral-x-Rival".to_string(),
+        "Viral x Rival".to_string(),
         "Warlord's Domain".to_string(),
     ];
 
@@ -121,11 +121,11 @@ pub async fn update_card(
 // Implement the functions for every power card
 
 #[derive(Debug, Deserialize)]
-struct MatchSetId {
+pub struct MatchSetId {
     match_set_id: uuid::Uuid,
 }
 
-async fn warlords_domain(
+pub async fn warlords_domain(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<MatchSetId>,
 ) -> Result<http::StatusCode, AppError> {
@@ -137,23 +137,66 @@ async fn warlords_domain(
     Ok(http::StatusCode::OK)
 }
 
+#[derive(Debug, Deserialize)]
 pub struct TwistOfFatePayload {
-    match_id: uuid::Uuid,
     user_id: uuid::Uuid,
-    current_opponent_id: uuid::Uuid,
-    chosen_opponent_id: uuid::Uuid,
+    selected_opponent_id: uuid::Uuid,
 }
 
-async fn twist_of_fate(
+// TODO: Negate the effect if either of the users have used Viral x Rival
+// Make a CTE for Viral x Rival
+// Before doing the swap, check if user1 or user2 have an activated VxR
+// If they do, do not swap
+pub async fn twist_of_fate(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<TwistOfFatePayload>,
-) -> Result<(), AppError> {
+) -> Result<http::StatusCode, AppError> {
     sqlx::query(
         r#"
-
-            
+        WITH CurrentMatch AS (
+            SELECT 
+                id,
+                CASE 
+                    WHEN user1_id = ($1) THEN user2_id
+                    ELSE user1_id
+                END AS current_opponent_id
+            FROM match_sets
+            WHERE user1_id = ($1) OR user2_id = ($1)
+            ORDER BY created_at DESC
+            LIMIT 1
+        ), SelectedMatch AS (
+            SELECT 
+                id,
+                CASE 
+                    WHEN user1_id = ($2) THEN user1_id
+                    ELSE user2_id
+                END AS selected_opponent_id
+            FROM match_sets
+            WHERE user1_id = ($2) OR user2_id = ($2)
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        UPDATE match_sets AS ms
+        SET 
+            user1_id = 
+                CASE 
+                    WHEN ms.id = cm.id AND ms.user1_id <> ($1) THEN sm.selected_opponent_id
+                    WHEN ms.id = sm.id AND ms.user1_id = sm.selected_opponent_id THEN cm.current_opponent_id
+                    ELSE ms.user1_id
+                END,
+            user2_id = 
+                CASE 
+                    WHEN ms.id = cm.id AND ms.user2_id <> ($1) THEN sm.selected_opponent_id
+                    WHEN ms.id = sm.id AND ms.user2_id = sm.selected_opponent_id THEN cm.current_opponent_id
+                    ELSE ms.user2_id
+                END
+        FROM CurrentMatch cm, SelectedMatch sm
         "#,
-    );
+    )
+    .bind(payload.user_id)
+    // .bind(payload.current_match_id)
+    .bind(payload.selected_opponent_id).execute(&pool)
+    .await?;
 
-    Ok(())
+    Ok(http::StatusCode::OK)
 }
