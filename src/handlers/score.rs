@@ -11,13 +11,10 @@ use crate::error::AppError;
 pub struct UpdateScore {
     user_id: uuid::Uuid,
     score: i32,
-    // Winner = positive, Loser = negative
     difference: i32,
     is_winner: bool,
 }
 
-// Add a query whether to increment or just change the score literally
-// For Double-edged Sword, add an "add" or "deduct" based on whoever won or lost
 pub async fn update_score(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<UpdateScore>,

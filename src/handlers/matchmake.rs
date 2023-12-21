@@ -25,8 +25,7 @@ pub struct Arnis {
     footwork: String,
 }
 
-// Matchmake by section only
-// Randomize skill (?)
+// TODO: Admin will choose skill, footwork is randomized (or vice versa?)
 pub async fn matchmake(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<Arnis>,
@@ -69,7 +68,7 @@ pub async fn matchmake(
             WHERE section = ($1) AND pp.user1_id IS NULL
           )
 
-        INSERT INTO match_sets (user1_id, user2_id, og_user1_id, og_user2_id, section, arnis_skill, arnis_footwork)
+        INSERT INTO match_sets (user1_id, user2_id, og_user1_id, og_user2_id, section, arnis_skill, arnis_footwork, og_arnis_skill)
         SELECT
           u1.id AS user1_id,
           u2.id AS user2_id,
@@ -77,7 +76,8 @@ pub async fn matchmake(
           u2.id AS og_user2_id,
           ($1) AS section,
           ($2) AS arnis_skill,
-          ($3) AS arnis_footwork
+          ($3) AS arnis_footwork,
+          ($2) AS og_arnis_skill
         FROM
           RankedUsers u1
           JOIN RankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
@@ -93,7 +93,8 @@ pub async fn matchmake(
           user2_id AS og_user2_id,
           ($1) AS section,
           ($2) AS arnis_skill,
-          ($3) AS arnis_footwork
+          ($3) AS arnis_footwork,
+          ($2) AS og_arnis_skill
         FROM
           PersistedPairs
         RETURNING *;

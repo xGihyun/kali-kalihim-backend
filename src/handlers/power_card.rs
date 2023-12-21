@@ -121,18 +121,47 @@ pub async fn update_card(
 // Implement the functions for every power card
 
 #[derive(Debug, Deserialize)]
-pub struct MatchSetId {
+pub struct WarlordsDomainPayload {
+    user_id: uuid::Uuid,
     match_set_id: uuid::Uuid,
+    arnis_skill: String,
 }
 
 pub async fn warlords_domain(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<MatchSetId>,
+    axum::Json(payload): axum::Json<WarlordsDomainPayload>,
 ) -> Result<http::StatusCode, AppError> {
-    sqlx::query("UPDATE match_sets SET arnis_skill = ($1) WHERE id = ($2)")
-        .bind(payload.match_set_id)
-        .execute(&pool)
-        .await?;
+    sqlx::query(
+        r#"
+        WITH CurrentMatch AS (
+            SELECT 
+                id,
+                CASE 
+                    WHEN user1_id = ($1) THEN user2_id
+                    ELSE user1_id
+                END AS current_opponent_id
+            FROM match_sets
+            WHERE id = ($2)
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        UPDATE match_sets AS ms
+        SET 
+            arnis_skill = 
+                CASE
+                    WHEN pc.is_active = TRUE and pc.is_used = FALSE THEN ms.og_arnis_skill
+                    ELSE ($3)
+                END
+        FROM CurrentMatch cm
+        JOIN power_cards pc ON user_id = cm.current_opponent_id AND name = 'Warlord''s Domain'
+        WHERE ms.id = ($2)
+        "#,
+    )
+    .bind(payload.user_id)
+    .bind(payload.match_set_id)
+    .bind(payload.arnis_skill)
+    .execute(&pool)
+    .await?;
 
     Ok(http::StatusCode::OK)
 }

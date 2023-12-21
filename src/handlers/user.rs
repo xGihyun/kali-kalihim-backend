@@ -1,5 +1,5 @@
-use axum::extract;
 use axum::response::Result;
+use axum::{extract, http};
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
 
@@ -28,14 +28,59 @@ pub struct User {
 pub async fn get_users(
     extract::State(pool): extract::State<PgPool>,
 ) -> Result<axum::Json<Vec<User>>, AppError> {
-    // Will be used for fetching specific columns on specific use cases
-    // let users = sqlx::query!("SELECT id, first_name FROM users")
-    //     .fetch_all(&pool)
-    //     .await?;
-
     let users = sqlx::query_as::<_, User>("SELECT * FROM users")
         .fetch_all(&pool)
         .await?;
 
     Ok(axum::Json(users))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateUser {
+    id: uuid::Uuid,
+    email: String,
+    section: String,
+    first_name: String,
+    last_name: String,
+    age: i32,
+    contact_number: i32,
+    sex: i16,
+    score: i32,
+    role: String,
+}
+
+pub async fn update_user(
+    extract::State(pool): extract::State<PgPool>,
+    axum::Json(payload): axum::Json<UpdateUser>,
+) -> Result<http::StatusCode, AppError> {
+    sqlx::query(
+        r#"
+        UPDATE users 
+        SET 
+            email = ($1), 
+            section = ($2), 
+            first_name = ($3), 
+            last_name = ($4),
+            age = ($5),
+            sex = ($6),
+            contact_number = ($7),
+            score = ($8),
+            role = ($9)
+        WHERE id = ($10)
+        "#,
+    )
+    .bind(payload.email)
+    .bind(payload.section)
+    .bind(payload.first_name)
+    .bind(payload.last_name)
+    .bind(payload.age)
+    .bind(payload.sex)
+    .bind(payload.contact_number)
+    .bind(payload.score)
+    .bind(payload.role)
+    .bind(payload.id)
+    .execute(&pool)
+    .await?;
+
+    Ok(http::StatusCode::OK)
 }
