@@ -1,6 +1,9 @@
+use axum::http;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
+
+use crate::error::AppError;
 
 use super::UserStatus;
 
@@ -60,7 +63,7 @@ impl Strike {
     pub fn new(name: &str) -> Self {
         match name {
             "leg_strike" => Strike::LegStrike(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 accuracy: 0.9,
                 damage: 5.0,
                 effect: Effect {
@@ -71,7 +74,7 @@ impl Strike {
                 },
             }),
             "temple_strike" => Strike::TempleStrike(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 accuracy: 0.75,
                 damage: 10.0,
                 effect: Effect {
@@ -82,7 +85,7 @@ impl Strike {
                 },
             }),
             "shoulder_strike" => Strike::ShoulderStrike(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 accuracy: 0.8,
                 damage: 10.0,
                 effect: Effect {
@@ -93,7 +96,7 @@ impl Strike {
                 },
             }),
             "shoulder_thrust" => Strike::ShoulderThrust(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 damage: 8.0,
                 accuracy: 0.85,
                 effect: Effect {
@@ -104,7 +107,7 @@ impl Strike {
                 },
             }),
             "eye_poke" => Strike::EyePoke(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 damage: 12.0,
                 accuracy: 0.6,
                 effect: Effect {
@@ -115,7 +118,7 @@ impl Strike {
                 },
             }),
             "stomach_thrust" => Strike::StomachThrust(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 damage: 10.0,
                 accuracy: 0.85,
                 effect: Effect {
@@ -126,7 +129,7 @@ impl Strike {
                 },
             }),
             "head_strike" => Strike::HeadStrike(StrikeStat {
-                name: name.to_string(),
+                name: name.into(),
                 damage: 18.0,
                 accuracy: 0.5,
                 effect: Effect {
@@ -140,19 +143,33 @@ impl Strike {
         }
     }
 
-    pub fn simulate(strike_stat: &StrikeStat, user_stat: &mut UserStatus) -> f32 {
-        let rng: f32 = rand::thread_rng().gen_range(0.0..1.0);
-        let accuracy = strike_stat.accuracy * user_stat.multiplier.accuracy;
-        let damage = strike_stat.damage * user_stat.multiplier.damage;
+    pub fn simulate(&self, user_status: &mut UserStatus) -> anyhow::Result<f32, AppError> {
+        match self {
+            Strike::LegStrike(strike_stat)
+            | Strike::TempleStrike(strike_stat)
+            | Strike::ShoulderStrike(strike_stat)
+            | Strike::ShoulderThrust(strike_stat)
+            | Strike::EyePoke(strike_stat)
+            | Strike::StomachThrust(strike_stat)
+            | Strike::HeadStrike(strike_stat) => {
+                let rng: f32 = rand::thread_rng().gen_range(0.0..1.0);
+                let accuracy = strike_stat.accuracy * user_status.multiplier.accuracy;
+                let damage = strike_stat.damage * user_status.multiplier.damage;
 
-        if rng <= accuracy {
-            user_stat.damage += damage;
-            user_stat.effect = Some(strike_stat.effect.clone());
+                if rng <= accuracy {
+                    user_status.damage += damage;
+                    user_status.effect = Some(strike_stat.effect.clone());
 
-            return damage;
+                    return Ok(damage);
+                }
+
+                Ok(0.0)
+            }
+            Strike::Unknown => Err(AppError::new(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Unknown battle card.",
+            )),
         }
-
-        0.0
     }
 }
 
@@ -180,7 +197,7 @@ impl Block {
     pub fn new(name: &str) -> Self {
         match name {
             "leg_strike" => Block::LegStrike(BlockStat {
-                name: "leg_strike_block".to_string(),
+                name: "leg_strike_block".into(),
                 damage_reduction: 0.1,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -191,7 +208,7 @@ impl Block {
                 },
             }),
             "temple_strike" => Block::TempleStrike(BlockStat {
-                name: "temple_strike_block".to_string(),
+                name: "temple_strike_block".into(),
                 damage_reduction: 0.15,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -202,7 +219,7 @@ impl Block {
                 },
             }),
             "shoulder_strike" => Block::ShoulderStrike(BlockStat {
-                name: "shoulder_strike_block".to_string(),
+                name: "shoulder_strike_block".into(),
                 damage_reduction: 0.15,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -213,7 +230,7 @@ impl Block {
                 },
             }),
             "shoulder_thrust" => Block::ShoulderThrust(BlockStat {
-                name: "shoulder_thrust_block".to_string(),
+                name: "shoulder_thrust_block".into(),
                 damage_reduction: 0.15,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -224,7 +241,7 @@ impl Block {
                 },
             }),
             "eye_poke" => Block::EyePoke(BlockStat {
-                name: "eye_poke_block".to_string(),
+                name: "eye_poke_block".into(),
                 damage_reduction: 0.15,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -235,7 +252,7 @@ impl Block {
                 },
             }),
             "stomach_thrust" => Block::StomachThrust(BlockStat {
-                name: "stomach_thrust_block".to_string(),
+                name: "stomach_thrust_block".into(),
                 damage_reduction: 0.15,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -246,7 +263,7 @@ impl Block {
                 },
             }),
             "head_strike" => Block::HeadStrike(BlockStat {
-                name: "head_strike_block".to_string(),
+                name: "head_strike_block".into(),
                 damage_reduction: 0.15,
                 strike_to_cancel: Strike::new(name),
                 effect: Effect {
@@ -257,6 +274,41 @@ impl Block {
                 },
             }),
             _ => Block::Unknown,
+        }
+    }
+
+    pub fn simulate(
+        &self,
+        user_status: &mut UserStatus,
+        opponent_card: Option<&Card>,
+        opponent_turn: &mut PlayerTurn,
+    ) -> anyhow::Result<(), AppError> {
+        match self {
+            Block::LegStrike(block_stat)
+            | Block::TempleStrike(block_stat)
+            | Block::ShoulderStrike(block_stat)
+            | Block::ShoulderThrust(block_stat)
+            | Block::EyePoke(block_stat)
+            | Block::StomachThrust(block_stat)
+            | Block::HeadStrike(block_stat) => {
+                let mut is_cancelled = false;
+
+                user_status.damage_reduction = block_stat.damage_reduction;
+
+                if let Some(Card::Strike(strike)) = opponent_card {
+                    is_cancelled = block_stat.strike_to_cancel == *strike;
+                }
+
+                if is_cancelled {
+                    user_status.effect = Some(block_stat.effect.clone());
+                }
+
+                Ok(())
+            }
+            Block::Unknown => Err(AppError::new(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Unknown block battle card.",
+            )),
         }
     }
 }

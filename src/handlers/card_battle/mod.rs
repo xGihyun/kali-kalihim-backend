@@ -164,11 +164,12 @@ impl Default for UserStatus {
 fn player_turn(
     (user1_cards, user2_cards): (&Vec<Option<Card>>, &Vec<Option<Card>>),
     (user1_turns, user2_turns): (&mut Vec<PlayerTurn>, &mut Vec<PlayerTurn>),
-) {
+) -> anyhow::Result<(), AppError> {
     let (mut user1_status, mut user2_status) = (UserStatus::default(), UserStatus::default());
 
     for i in 0..NUMBER_OF_CARDS {
-        let (user1_current_card, user2_current_card) = (&user1_cards[i], &user2_cards[i]);
+        let (user1_current_card, user2_current_card) =
+            (user1_cards[i].as_ref(), user2_cards[i].as_ref());
 
         // println!(">> Index: {i}\n");
         // println!(">> User 1 Current Card: {:?}\n", user1_current_card);
@@ -178,89 +179,37 @@ fn player_turn(
 
         apply_effects(
             (&mut user1_status, &mut user2_status),
-            (user1_current_card.as_ref(), user2_current_card.as_ref()),
+            (user1_current_card, user2_current_card),
         );
 
         // NOTE: Is there a better way to do this?
         if let Some(card) = user1_current_card {
             match card {
-                Card::Strike(strike) => match strike {
-                    Strike::LegStrike(strike_stat)
-                    | Strike::TempleStrike(strike_stat)
-                    | Strike::ShoulderStrike(strike_stat)
-                    | Strike::ShoulderThrust(strike_stat)
-                    | Strike::EyePoke(strike_stat)
-                    | Strike::StomachThrust(strike_stat)
-                    | Strike::HeadStrike(strike_stat) => {
-                        user1_turns[i].damage = Strike::simulate(strike_stat, &mut user1_status);
-                    }
-                    _ => eprintln!("UNKNOWN: Strike Card."),
-                },
-                Card::Block(block) => match block {
-                    Block::LegStrike(block_stat)
-                    | Block::TempleStrike(block_stat)
-                    | Block::ShoulderStrike(block_stat)
-                    | Block::ShoulderThrust(block_stat)
-                    | Block::EyePoke(block_stat)
-                    | Block::StomachThrust(block_stat)
-                    | Block::HeadStrike(block_stat) => {
-                        user1_status.damage_reduction = block_stat.damage_reduction;
-
-                        if let Some(Card::Strike(strike)) = user2_current_card {
-                            let is_cancelled = block_stat.strike_to_cancel == *strike;
-
-                            if is_cancelled {
-                                user2_turns[i].is_cancelled = true;
-                                user1_status.effect = Some(block_stat.effect.clone());
-                            }
-                        }
-                    }
-                    _ => eprintln!("UNKNOWN: Block Card"),
-                },
+                Card::Strike(strike) => {
+                    user1_turns[i].damage = strike.simulate(&mut user1_status)?;
+                }
+                Card::Block(block) => {
+                    block.simulate(&mut user1_status, user2_current_card, &mut user2_turns[i])?;
+                }
             }
         }
 
         if let Some(card) = user2_current_card {
             match card {
-                Card::Strike(strike) => match strike {
-                    Strike::LegStrike(strike_stat)
-                    | Strike::TempleStrike(strike_stat)
-                    | Strike::ShoulderStrike(strike_stat)
-                    | Strike::ShoulderThrust(strike_stat)
-                    | Strike::EyePoke(strike_stat)
-                    | Strike::StomachThrust(strike_stat)
-                    | Strike::HeadStrike(strike_stat) => {
-                        user2_turns[i].damage = Strike::simulate(strike_stat, &mut user2_status);
-                    }
-                    _ => eprintln!("UNKNOWN: Strike Card."),
-                },
-                Card::Block(block) => match block {
-                    Block::LegStrike(block_stat)
-                    | Block::TempleStrike(block_stat)
-                    | Block::ShoulderStrike(block_stat)
-                    | Block::ShoulderThrust(block_stat)
-                    | Block::EyePoke(block_stat)
-                    | Block::StomachThrust(block_stat)
-                    | Block::HeadStrike(block_stat) => {
-                        user2_status.damage_reduction = block_stat.damage_reduction;
-
-                        if let Some(Card::Strike(strike)) = user1_current_card {
-                            let is_cancelled = block_stat.strike_to_cancel == *strike;
-
-                            if is_cancelled {
-                                user1_turns[i].is_cancelled = true;
-                                user2_status.effect = Some(block_stat.effect.clone());
-                            }
-                        }
-                    }
-                    _ => eprintln!("UNKNOWN: Block Card"),
-                },
+                Card::Strike(strike) => {
+                    user2_turns[i].damage = strike.simulate(&mut user2_status)?;
+                }
+                Card::Block(block) => {
+                    block.simulate(&mut user2_status, user1_current_card, &mut user1_turns[i])?;
+                }
             }
         }
 
         // println!(">> User 1 Current Status (After): {:?}\n", user1_status);
         // println!(">> User 2 Current Status (After): {:?}\n\n", user2_status);
     }
+
+    Ok(())
 }
 
 fn change_stat(effect: &Effect, multiplier: &mut Multiplier) {
@@ -284,6 +233,7 @@ fn change_stat(effect: &Effect, multiplier: &mut Multiplier) {
     }
 }
 
+// TODO: Finish Block effects
 fn apply_effects(
     (user1_status, user2_status): (&mut UserStatus, &mut UserStatus),
     (user1_card, user2_card): (Option<&Card>, Option<&Card>),
@@ -324,34 +274,3 @@ fn apply_effects(
         }
     }
 }
-
-// pub fn card_battle(player_1_cards_str: String, player_2_cards_str: String) -> Result<(), AppError> {
-//     let player_1_cards_json = format!(r#"{player_1_cards_str}"#);
-//     let player_2_cards_json = format!(r#"{player_2_cards_str}"#);
-//
-//     let player_1_cards: Vec<BattleCard> =
-//         serde_json::from_str(&player_1_cards_json).expect("Failed to parse Player 1 cards");
-//     let player_2_cards: Vec<BattleCard> =
-//         serde_json::from_str(&player_2_cards_json).expect("Failed to parse Player 2 cards");
-//
-//     let mut player_1_turns: Vec<PlayerTurn> = vec![PlayerTurn::default(); 6];
-//     let mut player_2_turns: Vec<PlayerTurn> = vec![PlayerTurn::default(); 6];
-//
-//     player_turn(
-//         &player_1_cards,
-//         &player_2_cards,
-//         &mut player_1_turns,
-//         &mut player_2_turns,
-//     );
-//
-//     let battle_results = PlayerDamages {
-//         player_1: player_1_turns,
-//         player_2: player_2_turns,
-//     };
-//
-//     println!("{:?}", battle_results);
-//
-//     // let battle_results_js = JsValue::from_serde(&battle_results).expect("Failed to serialize");
-//
-//     Ok(())
-// }

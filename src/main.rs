@@ -17,7 +17,7 @@ use tower_http::cors::CorsLayer;
 mod error;
 mod handlers;
 
-use handlers::{card_battle, matchmake, power_card, score, user};
+use handlers::{card_battle, matchmake, power_card, score, section, user};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
@@ -33,11 +33,20 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
 
     let app = Router::new()
         .route("/", get(health))
+        // Auth
+        .route("/login", post(user::login))
+        .route("/register", post(user::register))
         // User
         .route("/users", get(user::get_users))
+        .route("/users/:user_id", get(user::get_user))
         .route("/users/update", post(user::update_user))
         .route("/scores/update", post(score::update_score))
         .route("/matchmake", post(matchmake::matchmake))
+        // Section
+        .route(
+            "/sections",
+            get(section::get_sections).post(section::insert_section),
+        )
         // Power Card
         .route("/power_card", post(power_card::update_card))
         .route("/power_card/insert", post(power_card::insert_card))
