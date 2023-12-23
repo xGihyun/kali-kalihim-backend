@@ -4,6 +4,7 @@ use axum::response::Result;
 use axum::{extract, http};
 use chrono::format;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{prelude::FromRow, PgPool};
 
 use crate::error::AppError;
@@ -29,7 +30,7 @@ pub struct User {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UserQuery {
+pub struct UsersQuery {
     section: Option<String>,
     order_by: bool,
 }
@@ -37,7 +38,7 @@ pub struct UserQuery {
 // TODO: Improve filtering
 pub async fn get_users(
     extract::State(pool): extract::State<PgPool>,
-    extract::Query(query): extract::Query<UserQuery>,
+    extract::Query(query): extract::Query<UsersQuery>,
 ) -> Result<axum::Json<Vec<User>>, AppError> {
     let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
         sqlx::QueryBuilder::new("SELECT * FROM users");
@@ -57,16 +58,41 @@ pub async fn get_users(
     Ok(axum::Json(users))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UserQuery {
+    filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct UserName {
+    first_name: String,
+    last_name: String,
+}
+
 pub async fn get_user(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(user_id): extract::Path<uuid::Uuid>,
-) -> Result<axum::Json<User>, AppError> {
-    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ($1)")
+    extract::Query(query): extract::Query<UserQuery>,
+) -> Result<axum::Json<serde_json::Value>, AppError> {
+    if let Some(filter) = query.filter {
+        let user = sqlx::query_as::<_, UserName>(
+            "SELECT first_name, last_name FROM users WHERE id = ($1)",
+        )
         .bind(user_id)
         .fetch_one(&pool)
         .await?;
+        let user_value = serde_json::to_value(user).unwrap();
 
-    Ok(axum::Json(user))
+        Ok(axum::Json(user_value))
+    } else {
+        let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = ($1)")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await?;
+        let user_value = serde_json::to_value(user).unwrap();
+
+        Ok(axum::Json(user_value))
+    }
 }
 
 #[derive(Debug, Deserialize)]
