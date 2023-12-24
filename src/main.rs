@@ -41,6 +41,9 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/users/:user_id", get(user::get_user))
         .route("/users/update", post(user::update_user))
         .route("/scores/update", post(score::update_score))
+        // Matches
+        .route("/matches", get(matchmake::get_matches))
+        .route("/max_sets", get(matchmake::get_max_sets))
         .route("/matchmake", post(matchmake::matchmake))
         // Section
         .route(

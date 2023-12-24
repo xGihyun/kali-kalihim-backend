@@ -5,8 +5,6 @@ use sqlx::prelude::FromRow;
 
 use crate::error::AppError;
 
-use super::UserStatus;
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub enum Change {
     Increase,
@@ -25,6 +23,12 @@ pub enum Card {
     Block(Block),
 }
 
+impl Card {
+    // pub fn apply_effects() {
+
+    // }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub enum Target {
     Owner,
@@ -37,6 +41,61 @@ pub struct Effect {
     pub amount: f32,
     pub stat: Stat,
     pub target: Target,
+}
+
+impl Effect {
+    pub fn change_stat(&self, multiplier: &mut Multiplier) {
+        match self.stat {
+            Stat::Accuracy => match self.action {
+                Change::Decrease => {
+                    multiplier.accuracy -= self.amount;
+                }
+                Change::Increase => {
+                    multiplier.accuracy += self.amount;
+                }
+            },
+            Stat::Damage => match self.action {
+                Change::Decrease => {
+                    multiplier.damage -= self.amount;
+                }
+                Change::Increase => {
+                    multiplier.damage += self.amount;
+                }
+            },
+        }
+    }
+
+    pub fn summarize(&self) -> String {
+        let mut target: String;
+
+        match self.target {
+            Target::Owner => {
+                target = "user".into();
+            }
+            Target::Opponent => {
+                target = "opponent".into();
+            }
+        }
+
+        match self.stat {
+            Stat::Accuracy => match self.action {
+                Change::Decrease => {
+                    format!("Decrease {} accuracy by {:.2}%", target, self.amount)
+                }
+                Change::Increase => {
+                    format!("Increase {} accuracy by {:.2}%", target, self.amount)
+                }
+            },
+            Stat::Damage => match self.action {
+                Change::Decrease => {
+                    format!("Decrease {} damage by {:.2}%", target, self.amount)
+                }
+                Change::Increase => {
+                    format!("Increase {} damage by {:.2}%", target, self.amount)
+                }
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
@@ -111,7 +170,7 @@ impl Strike {
                 damage: 12.0,
                 accuracy: 0.6,
                 effect: Effect {
-                    action: Change::Increase,
+                    action: Change::Decrease,
                     amount: 0.15,
                     stat: Stat::Accuracy,
                     target: Target::Opponent,
@@ -143,7 +202,13 @@ impl Strike {
         }
     }
 
-    pub fn simulate(&self, user_status: &mut UserStatus) -> anyhow::Result<f32, AppError> {
+    pub fn simulate(
+        &self,
+        user_status: &mut UserStatus,
+        user_turn: &mut PlayerTurn,
+        opponent_card: Option<&Card>,
+        opponent_status: &mut UserStatus,
+    ) -> anyhow::Result<(), AppError> {
         match self {
             Strike::LegStrike(strike_stat)
             | Strike::TempleStrike(strike_stat)
@@ -152,24 +217,48 @@ impl Strike {
             | Strike::EyePoke(strike_stat)
             | Strike::StomachThrust(strike_stat)
             | Strike::HeadStrike(strike_stat) => {
+                user_turn.card_name = Some(strike_stat.name.clone());
+                user_turn.card_effect = Some(strike_stat.effect.summarize());
+                opponent_status.damage_reduction = 0.0;
+                user_status.damage_reduction = 0.0;
+
+                let mut is_cancelled = false;
+
+                if let Some(Card::Block(block)) = opponent_card {
+                    if let Ok(block_stat) = block.get_stat() {
+                        is_cancelled = *self == block_stat.strike_to_cancel;
+                        opponent_status.damage_reduction = block_stat.damage_reduction;
+                    }
+                }
+
                 let rng: f32 = rand::thread_rng().gen_range(0.0..1.0);
                 let accuracy = strike_stat.accuracy * user_status.multiplier.accuracy;
-                let damage = strike_stat.damage * user_status.multiplier.damage;
+                let damage = (strike_stat.damage
+                    * (user_status.multiplier.damage - opponent_status.damage_reduction));
 
-                if rng <= accuracy {
+                if rng <= accuracy && is_cancelled == false {
                     user_status.damage += damage;
                     user_status.effect = Some(strike_stat.effect.clone());
 
-                    return Ok(damage);
+                    // println!("\nCURRENT DAMAGE: {}\n", damage);
+
+                    user_turn.damage = damage;
+                } else {
+                    // println!("\nMISSED!\n");
+                    user_turn.damage = 0.0;
                 }
 
-                Ok(0.0)
+                Ok(())
             }
             Strike::Unknown => Err(AppError::new(
                 http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Unknown battle card.",
             )),
         }
+    }
+
+    pub fn is_cancelled(&self, strike_to_cancel: Strike) -> bool {
+        *self == strike_to_cancel
     }
 }
 
@@ -280,6 +369,7 @@ impl Block {
     pub fn simulate(
         &self,
         user_status: &mut UserStatus,
+        user_turn: &mut PlayerTurn,
         opponent_card: Option<&Card>,
         opponent_turn: &mut PlayerTurn,
     ) -> anyhow::Result<(), AppError> {
@@ -291,20 +381,37 @@ impl Block {
             | Block::EyePoke(block_stat)
             | Block::StomachThrust(block_stat)
             | Block::HeadStrike(block_stat) => {
-                let mut is_cancelled = false;
-
                 user_status.damage_reduction = block_stat.damage_reduction;
+                user_turn.card_name = Some(block_stat.name.clone());
 
                 if let Some(Card::Strike(strike)) = opponent_card {
-                    is_cancelled = block_stat.strike_to_cancel == *strike;
+                    opponent_turn.is_cancelled =
+                        strike.is_cancelled(block_stat.strike_to_cancel.clone());
                 }
 
-                if is_cancelled {
+                if opponent_turn.is_cancelled {
                     user_status.effect = Some(block_stat.effect.clone());
+                    user_turn.card_effect = Some(block_stat.effect.summarize());
                 }
 
                 Ok(())
             }
+            Block::Unknown => Err(AppError::new(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                "Unknown block battle card.",
+            )),
+        }
+    }
+
+    pub fn get_stat(&self) -> anyhow::Result<BlockStat, AppError> {
+        match self {
+            Block::LegStrike(block_stat)
+            | Block::TempleStrike(block_stat)
+            | Block::ShoulderStrike(block_stat)
+            | Block::ShoulderThrust(block_stat)
+            | Block::EyePoke(block_stat)
+            | Block::StomachThrust(block_stat)
+            | Block::HeadStrike(block_stat) => Ok(block_stat.clone()),
             Block::Unknown => Err(AppError::new(
                 http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Unknown block battle card.",
@@ -340,8 +447,8 @@ pub struct PlayerTurnResults {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PlayerTurn {
-    // pub card_name: String,
-    // pub card_effect: ,
+    pub card_name: Option<String>,
+    pub card_effect: Option<String>,
     pub damage: f32,
     pub is_cancelled: bool,
 }
@@ -349,13 +456,15 @@ pub struct PlayerTurn {
 impl Default for PlayerTurn {
     fn default() -> Self {
         PlayerTurn {
+            card_name: None,
+            card_effect: None,
             damage: 0.0,
             is_cancelled: false,
         }
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct Multiplier {
     pub damage: f32,
     pub accuracy: f32,
@@ -366,6 +475,25 @@ impl Default for Multiplier {
         Multiplier {
             damage: 1.0,
             accuracy: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UserStatus {
+    pub damage: f32,
+    pub multiplier: Multiplier,
+    pub damage_reduction: f32,
+    pub effect: Option<Effect>,
+}
+
+impl Default for UserStatus {
+    fn default() -> Self {
+        UserStatus {
+            damage: 0.0,
+            multiplier: Multiplier::default(),
+            damage_reduction: 0.0,
+            effect: None,
         }
     }
 }

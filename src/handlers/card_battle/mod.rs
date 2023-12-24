@@ -1,14 +1,17 @@
 // NOTE: The code for this is VERY bad. I wrote this a few months ago and copy pasted it.
 
 use axum::{extract, http, response::Result};
-use sqlx::PgPool;
+use serde::{Deserialize, Serialize};
+use sqlx::{FromRow, PgPool};
 
 use crate::error::AppError;
 
 use self::model::{
     BattleCard, Block, Card, Change, CreateBattleCard, Effect, Multiplier, PlayerTurn,
-    PlayerTurnResults, Stat, Strike, Target,
+    PlayerTurnResults, Stat, Strike, Target, UserStatus,
 };
+
+use super::matchmake::MatchQuery;
 
 // pub mod card_battle;
 pub mod model;
@@ -88,27 +91,35 @@ async fn get_cards(
     Ok(battle_cards)
 }
 
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct CardBattle {
+    id: uuid::Uuid,
+    card_name: Option<String>,
+    card_effect: Option<String>,
+    damage: f32,
+    is_cancelled: bool,
+    turn_number: i32,
+    match_set_id: uuid::Uuid,
+}
+
 // Runs when admin simulates the card battle
-pub async fn card_battle(extract::State(pool): extract::State<PgPool>) -> Result<(), AppError> {
-    let latest_matches = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, uuid::Uuid)>(
-        r#"
-        WITH
-        LatestDate AS (
-            SELECT MAX(DATE_TRUNC('minute', created_at)) AS latest_date
-            FROM match_sets
-        ),
-        LatestMatches AS (
-            SELECT id, user1_id, user2_id
-            FROM match_sets
-            WHERE DATE_TRUNC('minute', created_at) = (SELECT latest_date FROM LatestDate)
-        )
-        SELECT * FROM LatestMatches
-        "#,
+pub async fn card_battle(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Query(query): extract::Query<MatchQuery>,
+) -> Result<(), AppError> {
+    let mut txn = pool.begin().await?;
+
+    let matches = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, uuid::Uuid)>(
+        r#"SELECT id, user1_id, user2_id FROM match_sets WHERE set = ($1) AND section = ($2)"#,
     )
-    .fetch_all(&pool)
+    .bind(query.set)
+    .bind(query.section)
+    .fetch_all(&mut *txn)
     .await?;
 
-    for (i, (match_set_id, user1_id, user2_id)) in latest_matches.iter().enumerate() {
+    for (i, (match_set_id, user1_id, user2_id)) in matches.iter().enumerate() {
+        println!("\n----- MATCH START -----\n");
+
         // Each user can only have 6 cards
         let user1_cards = get_cards(&pool, &user1_id, &match_set_id).await?;
         let user2_cards = get_cards(&pool, &user2_id, &match_set_id).await?;
@@ -126,6 +137,8 @@ pub async fn card_battle(extract::State(pool): extract::State<PgPool>) -> Result
             user2: user2_turns,
         };
 
+        insert_turns(&pool, &battle_results, match_set_id).await?;
+
         // For debugging purposes
         if i == 0 {
             println!(">> User1: {}\n", user1_id);
@@ -135,30 +148,53 @@ pub async fn card_battle(extract::State(pool): extract::State<PgPool>) -> Result
         }
     }
 
-    // TODO: Store the results in the database
-    // - Use a transaction
-    // - card_battle_history table will contain an id, user_id, damage, is_cancelled, card_name, card_effect (if possible, perhaps just make it a summary like "stat + x% for user1")
-
     Ok(())
 }
 
-#[derive(Debug)]
-struct UserStatus {
-    damage: f32,
-    multiplier: Multiplier,
-    damage_reduction: f32,
-    effect: Option<Effect>,
-}
+async fn insert_turns(
+    pool: &PgPool,
+    results: &PlayerTurnResults,
+    match_set_id: &uuid::Uuid,
+) -> Result<(), AppError> {
+    let mut txn = pool.begin().await?;
 
-impl Default for UserStatus {
-    fn default() -> Self {
-        UserStatus {
-            damage: 0.0,
-            multiplier: Multiplier::default(),
-            damage_reduction: 0.0,
-            effect: None,
-        }
+    for (i, turn) in results.user1.clone().into_iter().enumerate() {
+        let card_battle_results = sqlx::query(
+            r#"
+            INSERT INTO card_battle_history (card_name, card_effect, damage, is_cancelled, turn_number, match_set_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+        )
+        .bind(turn.card_name)
+        .bind(turn.card_effect)
+        .bind(turn.damage)
+        .bind(turn.is_cancelled)
+        .bind(i as i32 + 1)
+        .bind(match_set_id)
+        .fetch_all(&mut *txn)
+        .await?;
     }
+
+    for (i, turn) in results.user2.clone().into_iter().enumerate() {
+        let card_battle_results = sqlx::query(
+            r#"
+            INSERT INTO card_battle_history (card_name, card_effect, damage, is_cancelled, turn_number, match_set_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+        )
+        .bind(turn.card_name)
+        .bind(turn.card_effect)
+        .bind(turn.damage)
+        .bind(turn.is_cancelled)
+        .bind(i as i32 + 1)
+        .bind(match_set_id)
+        .fetch_all(&mut *txn)
+        .await?;
+    }
+
+    txn.commit().await?;
+
+    Ok(())
 }
 
 fn player_turn(
@@ -166,17 +202,27 @@ fn player_turn(
     (user1_turns, user2_turns): (&mut Vec<PlayerTurn>, &mut Vec<PlayerTurn>),
 ) -> anyhow::Result<(), AppError> {
     let (mut user1_status, mut user2_status) = (UserStatus::default(), UserStatus::default());
+    let (mut user1_status_temp, mut user2_status_temp) =
+        (UserStatus::default(), UserStatus::default());
+
+    let (mut prev_effect1, mut prev_effect2): (Option<Effect>, Option<Effect>) = (None, None);
 
     for i in 0..NUMBER_OF_CARDS {
         let (user1_current_card, user2_current_card) =
             (user1_cards[i].as_ref(), user2_cards[i].as_ref());
 
-        // println!(">> Index: {i}\n");
-        // println!(">> User 1 Current Card: {:?}\n", user1_current_card);
-        // println!(">> User 2 Current Card: {:?}\n", user2_current_card);
-        // println!(">> User 1 Current Status (Before): {:?}\n", user1_status);
-        // println!(">> User 2 Current Status (Before): {:?}\n", user2_status);
+        // println!("[!] TURN # {i}\n");
+        // println!("[?] CARDS\n");
+        // println!(">> User 1: {:?}\n", user1_current_card);
+        // println!(">> User 2: {:?}\n", user2_current_card);
+        // println!(">>> BEFORE\n");
+        // println!(">> User 1 Current Status: {:?}\n", user1_status);
+        // println!(">> User 2 Current Status: {:?}\n", user2_status);
 
+        user1_status_temp = user1_status.clone();
+        user2_status_temp = user2_status.clone();
+
+        // Change multipliers
         apply_effects(
             (&mut user1_status, &mut user2_status),
             (user1_current_card, user2_current_card),
@@ -186,10 +232,20 @@ fn player_turn(
         if let Some(card) = user1_current_card {
             match card {
                 Card::Strike(strike) => {
-                    user1_turns[i].damage = strike.simulate(&mut user1_status)?;
+                    strike.simulate(
+                        &mut user1_status,
+                        &mut user1_turns[i],
+                        user2_current_card,
+                        &mut user2_status,
+                    )?;
                 }
                 Card::Block(block) => {
-                    block.simulate(&mut user1_status, user2_current_card, &mut user2_turns[i])?;
+                    block.simulate(
+                        &mut user1_status,
+                        &mut user1_turns[i],
+                        user2_current_card,
+                        &mut user2_turns[i],
+                    )?;
                 }
             }
         }
@@ -197,80 +253,87 @@ fn player_turn(
         if let Some(card) = user2_current_card {
             match card {
                 Card::Strike(strike) => {
-                    user2_turns[i].damage = strike.simulate(&mut user2_status)?;
+                    strike.simulate(
+                        &mut user2_status,
+                        &mut user2_turns[i],
+                        user1_current_card,
+                        &mut user1_status,
+                    )?;
                 }
                 Card::Block(block) => {
-                    block.simulate(&mut user2_status, user1_current_card, &mut user1_turns[i])?;
+                    block.simulate(
+                        &mut user2_status,
+                        &mut user2_turns[i],
+                        user1_current_card,
+                        &mut user1_turns[i],
+                    )?;
                 }
             }
         }
 
-        // println!(">> User 1 Current Status (After): {:?}\n", user1_status);
-        // println!(">> User 2 Current Status (After): {:?}\n\n", user2_status);
+        // println!(">>> AFTER\n");
+        // println!(">> User 1 Current Status: {:?}\n", user1_status);
+        // println!(">> User 2 Current Status: {:?}\n\n", user2_status);
+
+        match prev_effect1 {
+            Some(effect) => {
+                // println!("PREVIOUS EFFECT (1): {:?}", effect);
+                user1_status = UserStatus::default();
+                // user1_status.effect = None;
+                // user1_status.multiplier = Multiplier::default();
+                prev_effect1 = None;
+            }
+            None => {
+                prev_effect1 = user1_status.effect.clone();
+                // println!("NEW EFFECT (1)");
+            }
+        }
+
+        match prev_effect2 {
+            Some(effect) => {
+                // println!("PREVIOUS EFFECT (2): {:?}", effect);
+                user2_status = UserStatus::default();
+                // user1_status.effect = None;
+                // user1_status.multiplier = Multiplier::default();
+                prev_effect2 = None;
+            }
+            None => {
+                prev_effect2 = user2_status.effect.clone();
+                // println!("NEW EFFECT (2)");
+            }
+        }
     }
 
     Ok(())
 }
 
-fn change_stat(effect: &Effect, multiplier: &mut Multiplier) {
-    match effect.stat {
-        Stat::Accuracy => match effect.action {
-            Change::Decrease => {
-                multiplier.accuracy -= effect.amount;
+fn apply_effect(
+    user_status: &mut UserStatus,
+    opponent_status: &mut UserStatus,
+    user_card: Option<&Card>,
+) {
+    if let Some(card) = user_card {
+        match card {
+            Card::Strike(_) | Card::Block(_) => {
+                if let Some(effect) = &user_status.effect {
+                    match effect.target {
+                        Target::Opponent => {
+                            effect.change_stat(&mut opponent_status.multiplier);
+                        }
+                        Target::Owner => {
+                            effect.change_stat(&mut user_status.multiplier);
+                        }
+                    }
+                }
             }
-            Change::Increase => {
-                multiplier.accuracy += effect.amount;
-            }
-        },
-        Stat::Damage => match effect.action {
-            Change::Decrease => {
-                multiplier.damage -= effect.amount;
-            }
-            Change::Increase => {
-                multiplier.damage += effect.amount;
-            }
-        },
+        }
     }
 }
 
-// TODO: Finish Block effects
 fn apply_effects(
     (user1_status, user2_status): (&mut UserStatus, &mut UserStatus),
     (user1_card, user2_card): (Option<&Card>, Option<&Card>),
 ) {
-    if let Some(card) = user1_card {
-        match card {
-            Card::Strike(_) => {
-                if let Some(effect) = &user1_status.effect {
-                    match effect.target {
-                        Target::Opponent => {
-                            change_stat(&effect, &mut user2_status.multiplier);
-                        }
-                        Target::Owner => {
-                            change_stat(&effect, &mut user1_status.multiplier);
-                        }
-                    }
-                }
-            }
-            Card::Block(_) => {}
-        }
-    }
-
-    if let Some(card) = user2_card {
-        match card {
-            Card::Strike(_) => {
-                if let Some(effect) = &user2_status.effect {
-                    match effect.target {
-                        Target::Opponent => {
-                            change_stat(&effect, &mut user1_status.multiplier);
-                        }
-                        Target::Owner => {
-                            change_stat(&effect, &mut user2_status.multiplier);
-                        }
-                    }
-                }
-            }
-            Card::Block(_) => {}
-        }
-    }
+    apply_effect(user1_status, user2_status, user1_card);
+    apply_effect(user2_status, user1_status, user2_card);
 }
