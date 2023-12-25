@@ -435,14 +435,14 @@ pub struct CreateBattleCard {
     pub name: String,
     pub skill: String,
     pub user_id: uuid::Uuid,
-    pub match_set_id: uuid::Uuid,
-    pub turn_number: i16,
+    // pub match_set_id: uuid::Uuid,
+    // pub turn_number: i16,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PlayerTurnResults {
-    pub user1: Vec<PlayerTurn>,
-    pub user2: Vec<PlayerTurn>,
+    pub user1: (uuid::Uuid, Vec<PlayerTurn>),
+    pub user2: (uuid::Uuid, Vec<PlayerTurn>),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

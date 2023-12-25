@@ -2,7 +2,7 @@
 
 use axum::{extract, http, response::Result};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgConnection, PgPool};
 
 use crate::error::AppError;
 
@@ -24,15 +24,38 @@ pub async fn insert_cards(
 ) -> Result<http::StatusCode, AppError> {
     let mut txn = pool.begin().await?;
 
-    for card in payload {
+    for (i, card) in payload.into_iter().enumerate() {
         sqlx::query(
-            "INSERT INTO battle_cards (name, skill, user_id, match_set_id, turn_number) VALUES ($1, $2, $3, $4, $5)",
+            r#"
+            WITH LatestMatch AS (
+                SELECT id
+                FROM match_sets
+                WHERE og_user1_id = ($3) OR og_user2_id = ($3)
+                ORDER BY created_at DESC
+                LIMIT 1 
+            )
+            INSERT INTO battle_cards (name, skill, user_id, turn_number, match_set_id) 
+            SELECT 
+                ($1) AS name, 
+                ($2) AS skill, 
+                ($3) AS user_id, 
+                ($4) AS turn_number,
+                LatestMatch.id AS match_set_id
+            FROM LatestMatch
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM battle_cards
+                WHERE user_id = ($3)
+                  AND turn_number = ($4)
+                  AND match_set_id = LatestMatch.id
+            )
+            "#,
         )
         .bind(card.name)
         .bind(card.skill)
         .bind(card.user_id)
-        .bind(card.match_set_id)
-        .bind(card.turn_number)
+        // .bind(card.match_set_id)
+        .bind(i as i16 + 1)
         .execute(&mut *txn)
         .await?;
     }
@@ -100,6 +123,7 @@ pub struct CardBattle {
     is_cancelled: bool,
     turn_number: i32,
     match_set_id: uuid::Uuid,
+    user_id: uuid::Uuid,
 }
 
 // Runs when admin simulates the card battle
@@ -133,11 +157,12 @@ pub async fn card_battle(
         );
 
         let battle_results = PlayerTurnResults {
-            user1: user1_turns,
-            user2: user2_turns,
+            user1: (*user1_id, user1_turns),
+            user2: (*user2_id, user2_turns),
         };
 
-        insert_turns(&pool, &battle_results, match_set_id).await?;
+        process_match_results(&pool, &battle_results, match_set_id).await?;
+        update_total_damage(&pool, match_set_id).await?;
 
         // For debugging purposes
         if i == 0 {
@@ -151,48 +176,104 @@ pub async fn card_battle(
     Ok(())
 }
 
-async fn insert_turns(
+// Could be improved
+// Could merge query with the query on process_match_results()
+// TODO: Add +10 points to the winner's rating
+async fn update_total_damage(pool: &PgPool, match_set_id: &uuid::Uuid) -> Result<(), AppError> {
+    sqlx::query(
+        r#"
+           
+        WITH TotalDamage AS (
+            SELECT
+                user_id,
+                SUM(damage) as total_damage 
+            FROM
+                card_battle_history
+            WHERE
+                match_set_id = ($1)
+            GROUP BY
+                user_id, match_set_id
+        )
+        UPDATE match_sets
+        SET
+            user1_total_damage = (SELECT total_damage FROM TotalDamage WHERE user_id = match_sets.user1_id),
+            user2_total_damage = (SELECT total_damage FROM TotalDamage WHERE user_id = match_sets.user2_id)
+        WHERE
+            match_sets.id = ($1);
+        "#,
+    )
+    .bind(match_set_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+async fn process_match_results(
     pool: &PgPool,
     results: &PlayerTurnResults,
     match_set_id: &uuid::Uuid,
 ) -> Result<(), AppError> {
-    let mut txn = pool.begin().await?;
+    let (user_id, turns) = results.user1.clone();
+    insert_turns(&user_id, turns, match_set_id, pool).await?;
 
-    for (i, turn) in results.user1.clone().into_iter().enumerate() {
-        let card_battle_results = sqlx::query(
-            r#"
-            INSERT INTO card_battle_history (card_name, card_effect, damage, is_cancelled, turn_number, match_set_id)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
+    let (user_id, turns) = results.user2.clone();
+    insert_turns(&user_id, turns, match_set_id, pool).await?;
+
+    Ok(())
+}
+
+async fn insert_turns(
+    user_id: &uuid::Uuid,
+    turns: Vec<PlayerTurn>,
+    match_set_id: &uuid::Uuid,
+    pool: &PgPool, // txn: &mut PgConnection,
+) -> Result<(), AppError> {
+    if let Some(_) = &turns[0].card_name {
+        let mut txn = pool.begin().await?;
+
+        let sql = r#"
+        INSERT INTO card_battle_history (
+            user_id,
+            card_name,
+            card_effect,
+            damage,
+            is_cancelled,
+            turn_number,
+            match_set_id
         )
-        .bind(turn.card_name)
-        .bind(turn.card_effect)
-        .bind(turn.damage)
-        .bind(turn.is_cancelled)
-        .bind(i as i32 + 1)
-        .bind(match_set_id)
-        .fetch_all(&mut *txn)
-        .await?;
-    }
-
-    for (i, turn) in results.user2.clone().into_iter().enumerate() {
-        let card_battle_results = sqlx::query(
-            r#"
-            INSERT INTO card_battle_history (card_name, card_effect, damage, is_cancelled, turn_number, match_set_id)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
+        SELECT
+            ($1) AS user_id,
+            ($2) AS card_name,
+            ($3) AS card_effect,
+            ($4) AS damage,
+            ($5) AS is_cancelled,
+            ($6) AS turn_number,
+            ($7) AS match_set_id
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM card_battle_history
+            WHERE user_id = ($1)
+              AND turn_number = ($6)
+              AND match_set_id = ($7)
         )
-        .bind(turn.card_name)
-        .bind(turn.card_effect)
-        .bind(turn.damage)
-        .bind(turn.is_cancelled)
-        .bind(i as i32 + 1)
-        .bind(match_set_id)
-        .fetch_all(&mut *txn)
-        .await?;
-    }
+    "#;
 
-    txn.commit().await?;
+        for (i, turn) in turns.into_iter().enumerate() {
+            sqlx::query(sql)
+                .bind(user_id)
+                .bind(turn.card_name)
+                .bind(turn.card_effect)
+                .bind(turn.damage)
+                .bind(turn.is_cancelled)
+                .bind(i as i32 + 1)
+                .bind(match_set_id)
+                .execute(&mut *txn)
+                .await?;
+        }
+
+        txn.commit().await?;
+    }
 
     Ok(())
 }

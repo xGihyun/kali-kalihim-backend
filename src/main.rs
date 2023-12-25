@@ -43,6 +43,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/scores/update", post(score::update_score))
         // Matches
         .route("/matches", get(matchmake::get_matches))
+        .route("/matches/latest", post(matchmake::get_latest_match))
         .route("/max_sets", get(matchmake::get_max_sets))
         .route("/matchmake", post(matchmake::matchmake))
         // Section
