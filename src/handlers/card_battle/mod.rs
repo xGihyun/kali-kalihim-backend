@@ -18,6 +18,32 @@ pub mod model;
 
 const NUMBER_OF_CARDS: usize = 6;
 
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct CardBattle {
+    id: uuid::Uuid,
+    card_name: Option<String>,
+    card_effect: Option<String>,
+    damage: f32,
+    is_cancelled: bool,
+    turn_number: i32,
+    match_set_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+}
+
+pub async fn get_match_results(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Path(match_set_id): extract::Path<uuid::Uuid>,
+) -> Result<axum::Json<Vec<CardBattle>>, AppError> {
+    let card_battle = sqlx::query_as::<_, CardBattle>(
+        "SELECT * FROM card_battle_history WHERE match_set_id = ($1) ORDER BY user_id, turn_number",
+    )
+    .bind(match_set_id)
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(axum::Json(card_battle))
+}
+
 pub async fn insert_cards(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<Vec<CreateBattleCard>>,
@@ -114,18 +140,6 @@ async fn get_cards(
     Ok(battle_cards)
 }
 
-#[derive(Debug, Deserialize, Serialize, FromRow)]
-pub struct CardBattle {
-    id: uuid::Uuid,
-    card_name: Option<String>,
-    card_effect: Option<String>,
-    damage: f32,
-    is_cancelled: bool,
-    turn_number: i32,
-    match_set_id: uuid::Uuid,
-    user_id: uuid::Uuid,
-}
-
 // Runs when admin simulates the card battle
 pub async fn card_battle(
     extract::State(pool): extract::State<PgPool>,
@@ -143,6 +157,7 @@ pub async fn card_battle(
 
     for (i, (match_set_id, user1_id, user2_id)) in matches.iter().enumerate() {
         println!("\n----- MATCH START -----\n");
+        println!("{match_set_id}");
 
         // Each user can only have 6 cards
         let user1_cards = get_cards(&pool, &user1_id, &match_set_id).await?;

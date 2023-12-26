@@ -52,17 +52,25 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             get(section::get_sections).post(section::insert_section),
         )
         // Power Card
-        .route("/power_card", post(power_card::update_card))
-        .route("/power_card/insert", post(power_card::insert_card))
+        .route("/power_cards", post(power_card::get_cards))
+        .route("/power_cards/update", post(power_card::update_card))
+        .route("/power_cards/insert", post(power_card::insert_card))
         .route(
-            "/power_card/warlords_domain",
+            "/power_cards/warlords_domain",
             post(power_card::warlords_domain),
         )
-        .route("/power_card/twist_of_fate", post(power_card::twist_of_fate))
+        .route(
+            "/power_cards/twist_of_fate",
+            post(power_card::twist_of_fate),
+        )
         // Card Battle
         .route(
             "/card_battle",
             get(card_battle::card_battle).post(card_battle::insert_cards),
+        )
+        .route(
+            "/card_battle/:match_set_id",
+            get(card_battle::get_match_results),
         )
         .layer(CorsLayer::permissive())
         .with_state(pool);

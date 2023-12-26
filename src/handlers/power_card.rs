@@ -5,6 +5,8 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
 
+use super::user::UserId;
+
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct PowerCard {
     id: uuid::Uuid,
@@ -12,6 +14,18 @@ pub struct PowerCard {
     is_used: bool,
     is_active: bool,
     user_id: uuid::Uuid,
+}
+
+pub async fn get_cards(
+    extract::State(pool): extract::State<PgPool>,
+    axum::Json(payload): axum::Json<UserId>,
+) -> Result<axum::Json<Vec<PowerCard>>, AppError> {
+    let power_cards = sqlx::query_as("SELECT * FROM power_cards WHERE user_id = ($1)")
+        .bind(payload.user_id)
+        .fetch_all(&pool)
+        .await?;
+
+    Ok(axum::Json(power_cards))
 }
 
 // Three (3) random cards per user, duplicates are allowed

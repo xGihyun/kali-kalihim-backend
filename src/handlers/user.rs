@@ -9,6 +9,11 @@ use sqlx::{prelude::FromRow, PgPool};
 
 use crate::error::AppError;
 
+#[derive(Debug, Deserialize)]
+pub struct UserId {
+    pub user_id: uuid::Uuid,
+}
+
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct User {
     id: uuid::Uuid,

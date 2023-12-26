@@ -6,6 +6,8 @@ use sqlx::{prelude::FromRow, PgPool};
 
 use crate::error::AppError;
 
+use super::user::UserId;
+
 // This is horrible
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct Matchmake {
@@ -29,26 +31,21 @@ pub struct Matchmake {
     user2_total_damage: Option<f32>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct UserId {
-    user_id: uuid::Uuid
-}
-
 pub async fn get_latest_match(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UserId>
-) -> Result<axum::Json<Matchmake>, AppError> {
-    let latest_match= sqlx::query_as::<_, Matchmake>(
+    axum::Json(payload): axum::Json<UserId>,
+) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    let latest_match = sqlx::query_as::<_, Matchmake>(
         r#"
         SELECT *
         FROM match_sets
         WHERE og_user1_id = ($1) OR og_user2_id = ($1)
         ORDER BY created_at DESC
-        LIMIT 1 
-        "#
+        -- LIMIT 1 
+        "#,
     )
     .bind(payload.user_id)
-    .fetch_one(&pool)
+    .fetch_all(&pool)
     .await?;
 
     Ok(axum::Json(latest_match))

@@ -10,7 +10,13 @@ tokio = { version = "1.35.0", features = ["full"] }
 axum = "0.7.2"
 tower = { version = "0.4.13", features = ["util"] }
 tower-http = { version = "0.5.0", features = ["fs", "trace", "cors"] }
-sqlx = { version = "0.7.3", features = ["runtime-tokio-rustls", "postgres", "chrono", "time", "uuid"] }
+sqlx = { version = "0.7.3", features = [
+  "runtime-tokio-rustls",
+  "postgres",
+  "chrono",
+  "time",
+  "uuid",
+] }
 chrono = { version = "0.4.31", features = ["serde"] }
 uuid = { version = "1.6.1", features = ["serde"] }
 serde = "1.0.193"
