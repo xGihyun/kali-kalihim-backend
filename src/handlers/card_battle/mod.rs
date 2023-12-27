@@ -193,14 +193,13 @@ pub async fn card_battle(
 
 // Could be improved
 // Could merge query with the query on process_match_results()
-// TODO: Add +10 points to the winner's rating
 async fn update_total_damage(pool: &PgPool, match_set_id: &uuid::Uuid) -> Result<(), AppError> {
     sqlx::query(
         r#"
-           
         WITH TotalDamage AS (
             SELECT
                 user_id,
+                match_set_id,
                 SUM(damage) as total_damage 
             FROM
                 card_battle_history
@@ -208,13 +207,24 @@ async fn update_total_damage(pool: &PgPool, match_set_id: &uuid::Uuid) -> Result
                 match_set_id = ($1)
             GROUP BY
                 user_id, match_set_id
+        ), UpdateTotalDamage AS (
+            UPDATE match_sets
+            SET
+                user1_total_damage = (SELECT total_damage FROM TotalDamage WHERE user_id = match_sets.user1_id),
+                user2_total_damage = (SELECT total_damage FROM TotalDamage WHERE user_id = match_sets.user2_id)
+            WHERE
+                match_sets.id = ($1)
+            RETURNING user1_total_damage, user2_total_damage
         )
-        UPDATE match_sets
-        SET
-            user1_total_damage = (SELECT total_damage FROM TotalDamage WHERE user_id = match_sets.user1_id),
-            user2_total_damage = (SELECT total_damage FROM TotalDamage WHERE user_id = match_sets.user2_id)
-        WHERE
-            match_sets.id = ($1);
+
+        UPDATE users
+        SET score = score + 10
+        WHERE id = (
+            SELECT
+                CASE WHEN user1_total_damage > user2_total_damage THEN user1_id ELSE user2_id END
+            FROM match_sets
+            WHERE id = ($1)
+        );
         "#,
     )
     .bind(match_set_id)

@@ -1,5 +1,5 @@
-use axum::extract;
 use axum::response::Result;
+use axum::{extract, http};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{prelude::FromRow, PgPool};
@@ -49,6 +49,25 @@ pub async fn get_latest_match(
     .await?;
 
     Ok(axum::Json(latest_match))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateMatchStatus {
+    match_set_id: uuid::Uuid,
+    status: String,
+}
+
+pub async fn update_match_status(
+    extract::State(pool): extract::State<PgPool>,
+    axum::Json(payload): axum::Json<UpdateMatchStatus>,
+) -> Result<http::StatusCode, AppError> {
+    sqlx::query("UPDATE match_sets SET status = ($1) WHERE id = ($2)")
+        .bind(payload.status)
+        .bind(payload.match_set_id)
+        .execute(&pool)
+        .await?;
+
+    Ok(http::StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]

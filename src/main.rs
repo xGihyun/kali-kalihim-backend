@@ -40,9 +40,11 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/users", get(user::get_users))
         .route("/users/:user_id", get(user::get_user))
         .route("/users/update", post(user::update_user))
+        .route("/users/update/column", post(user::update_column))
         .route("/scores/update", post(score::update_score))
         // Matches
         .route("/matches", get(matchmake::get_matches))
+        .route("/matches/update", post(matchmake::update_match_status))
         .route("/matches/latest", post(matchmake::get_latest_match))
         .route("/max_sets", get(matchmake::get_max_sets))
         .route("/matchmake", post(matchmake::matchmake))

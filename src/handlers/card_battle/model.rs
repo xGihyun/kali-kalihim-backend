@@ -218,7 +218,6 @@ impl Strike {
             | Strike::StomachThrust(strike_stat)
             | Strike::HeadStrike(strike_stat) => {
                 user_turn.card_name = Some(strike_stat.name.clone());
-                user_turn.card_effect = Some(strike_stat.effect.summarize());
                 opponent_status.damage_reduction = 0.0;
                 user_status.damage_reduction = 0.0;
 
@@ -239,6 +238,7 @@ impl Strike {
                 if rng <= accuracy && is_cancelled == false {
                     user_status.damage += damage;
                     user_status.effect = Some(strike_stat.effect.clone());
+                    user_turn.card_effect = Some(strike_stat.effect.summarize());
 
                     // println!("\nCURRENT DAMAGE: {}\n", damage);
 

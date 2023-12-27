@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use axum::response::Result;
 use axum::{extract, http};
 use chrono::format;
@@ -100,6 +98,7 @@ pub async fn get_user(
     }
 }
 
+// For admin
 #[derive(Debug, Deserialize)]
 pub struct UpdateUser {
     id: uuid::Uuid,
@@ -146,6 +145,33 @@ pub async fn update_user(
     .bind(payload.id)
     .execute(&pool)
     .await?;
+
+    Ok(http::StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAvatar {
+    user_id: uuid::Uuid,
+    url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct UpdateQuery {
+    column: String, // avatar_url || banner_url
+}
+
+pub async fn update_column(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Query(query): extract::Query<UpdateQuery>,
+    extract::Json(payload): extract::Json<UpdateAvatar>,
+) -> Result<http::StatusCode, AppError> {
+    let sql = format!("UPDATE users SET {} = ($1) WHERE id = ($2)", query.column);
+
+    sqlx::query(sql.as_str())
+        .bind(payload.url)
+        .bind(payload.user_id)
+        .execute(&pool)
+        .await?;
 
     Ok(http::StatusCode::OK)
 }
