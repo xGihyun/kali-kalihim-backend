@@ -20,10 +20,11 @@ pub async fn get_cards(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<UserId>,
 ) -> Result<axum::Json<Vec<PowerCard>>, AppError> {
-    let power_cards = sqlx::query_as("SELECT * FROM power_cards WHERE user_id = ($1)")
-        .bind(payload.user_id)
-        .fetch_all(&pool)
-        .await?;
+    let power_cards =
+        sqlx::query_as("SELECT * FROM power_cards WHERE user_id = ($1) ORDER BY name")
+            .bind(payload.user_id)
+            .fetch_all(&pool)
+            .await?;
 
     Ok(axum::Json(power_cards))
 }

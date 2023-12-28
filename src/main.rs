@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
     let ip_addr = env::var("IP_ADDRESS").unwrap_or("127.0.0.1".to_string());
 
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(50)
+        .max_connections(20)
         .connect(&db_url)
         .await?;
 
@@ -46,6 +46,10 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/matches", get(matchmake::get_matches))
         .route("/matches/update", post(matchmake::update_match_status))
         .route("/matches/latest", post(matchmake::get_latest_match))
+        .route(
+            "/matches/latest/:user_id",
+            get(matchmake::get_latest_opponent),
+        )
         .route("/max_sets", get(matchmake::get_max_sets))
         .route("/matchmake", post(matchmake::matchmake))
         // Section

@@ -51,6 +51,39 @@ pub async fn get_latest_match(
     Ok(axum::Json(latest_match))
 }
 
+#[derive(Debug, Serialize, FromRow)]
+pub struct LatestOpponentData {
+    first_name: String,
+    last_name: String,
+    score: i32,
+    avatar_url: Option<String>,
+    banner_url: Option<String>,
+}
+
+pub async fn get_latest_opponent(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Path(user_id): extract::Path<uuid::Uuid>,
+) -> Result<axum::Json<LatestOpponentData>, AppError> {
+    let res = sqlx::query_as::<_, LatestOpponentData>(
+        r#"
+        WITH LatestMatch AS (
+            SELECT
+                CASE
+                WHEN og_user1_id = ($1) THEN user2_id
+                ELSE user1_id
+                END AS opponent_id
+            FROM match_sets
+            WHERE og_user1_id = ($1) OR og_user2_id = ($1)
+            ORDER BY created_at DESC
+            LIMIT 1
+        )
+        SELECT first_name, last_name, score, avatar_url, banner_url FROM users WHERE id = (SELECT opponent_id FROM LatestMatch);
+        "#
+    ).bind(user_id).fetch_one(&pool).await?;
+
+    Ok(axum::Json(res))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateMatchStatus {
     match_set_id: uuid::Uuid,
