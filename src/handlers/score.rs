@@ -15,9 +15,27 @@ pub struct UpdateScore {
     is_winner: bool,
 }
 
+// Query to update rankings
+// WITH OverallRank AS (
+//     SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
+//     FROM users
+// ), SectionRank AS (
+//     SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
+//     FROM users
+// )
+// UPDATE users u
+// SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
+// FROM OverallRank ovr, SectionRank sr
+// WHERE u.id = ovr.id AND u.id = sr.id
+
+// Query to update activated power cards
+// UPDATE power_cards
+// SET is_used = TRUE
+// WHERE id = ($3) AND is_active = TRUE AND is_used = FALSE
+
 pub async fn update_score(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UpdateScore>,
+    extract::Json(payload): extract::Json<UpdateScore>,
 ) -> Result<http::StatusCode, AppError> {
     // current score + payload score
     sqlx::query(

@@ -63,7 +63,7 @@ pub struct LatestOpponentData {
 pub async fn get_latest_opponent(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(user_id): extract::Path<uuid::Uuid>,
-) -> Result<axum::Json<LatestOpponentData>, AppError> {
+) -> Result<axum::Json<Option<LatestOpponentData>>, AppError> {
     let res = sqlx::query_as::<_, LatestOpponentData>(
         r#"
         WITH LatestMatch AS (
@@ -79,7 +79,7 @@ pub async fn get_latest_opponent(
         )
         SELECT first_name, last_name, score, avatar_url, banner_url FROM users WHERE id = (SELECT opponent_id FROM LatestMatch);
         "#
-    ).bind(user_id).fetch_one(&pool).await?;
+    ).bind(user_id).fetch_optional(&pool).await?;
 
     Ok(axum::Json(res))
 }

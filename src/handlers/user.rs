@@ -16,7 +16,6 @@ pub struct UserId {
 pub struct User {
     id: uuid::Uuid,
     email: String,
-    password: String,
     section: String,
     first_name: String,
     last_name: String,
@@ -38,7 +37,7 @@ pub struct UsersQuery {
     order_by: bool,
 }
 
-// TODO: Improve filtering
+// TODO: Improve filtering, use comma separated fields query to fetch specific columns only
 pub async fn get_users(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<UsersQuery>,
@@ -115,7 +114,7 @@ pub struct UpdateUser {
 
 pub async fn update_user(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UpdateUser>,
+    extract::Json(payload): extract::Json<UpdateUser>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query(
         r#"
@@ -160,6 +159,7 @@ pub struct UpdateQuery {
     column: String, // avatar_url || banner_url
 }
 
+// Use a comma separated query
 pub async fn update_column(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<UpdateQuery>,
@@ -177,41 +177,9 @@ pub async fn update_column(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Login {
-    email: String,
-    password: String,
-}
-
-pub async fn login(
-    extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<Login>,
-) -> Result<axum::Json<User>, AppError> {
-    let res =
-        sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = ($1) AND password = ($2)")
-            .bind(payload.email)
-            .bind(payload.password)
-            .fetch_one(&pool)
-            .await;
-
-    match res {
-        Ok(user) => Ok(axum::Json(user)),
-        Err(err) => match err {
-            sqlx::Error::RowNotFound => Err(AppError::new(
-                http::StatusCode::NOT_FOUND,
-                format!("User doesn't exist."),
-            )),
-            _ => Err(AppError::new(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                err.to_string(),
-            )),
-        },
-    }
-}
-
-#[derive(Debug, Deserialize)]
 pub struct Register {
+    id: uuid::Uuid,
     email: String,
-    password: String,
     section: String,
     first_name: String,
     last_name: String,
@@ -222,23 +190,23 @@ pub struct Register {
 
 pub async fn register(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<Register>,
+    extract::Json(payload): extract::Json<Register>,
 ) -> Result<axum::Json<User>, AppError> {
     let res = sqlx::query_as::<_, User>(
         r#"
-        INSERT INTO users (email, password, section, first_name, last_name, age, contact_number, sex)
+        INSERT INTO users (id, email, section, first_name, last_name, age, contact_number, sex)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
-        "#
+        "#,
     )
-    .bind(payload.email)
-    .bind(payload.password)
-    .bind(payload.section)
-    .bind(payload.first_name)
-    .bind(payload.last_name)
-    .bind(payload.age)
-    .bind(payload.contact_number)
-    .bind(payload.sex)
+    .bind(&payload.id)
+    .bind(&payload.email)
+    .bind(&payload.section)
+    .bind(&payload.first_name)
+    .bind(&payload.last_name)
+    .bind(&payload.age)
+    .bind(&payload.contact_number)
+    .bind(&payload.sex)
     .fetch_one(&pool)
     .await;
 

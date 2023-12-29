@@ -16,54 +16,55 @@ pub struct PowerCard {
     user_id: uuid::Uuid,
 }
 
+impl PowerCard {
+    // Three (3) random cards per user, duplicates are allowed
+    fn get_random_cards(amount: usize) -> Vec<String> {
+        let power_cards: Vec<String> = vec![
+            "Ancient's Protection".to_string(),
+            "Double-edged Sword".to_string(),
+            "Extra Wind".to_string(),
+            "Twist of Fate".to_string(),
+            "Viral x Rival".to_string(),
+            "Warlord's Domain".to_string(),
+        ];
+
+        let mut rng = rand::thread_rng();
+        power_cards
+            .choose_multiple(&mut rng, amount)
+            .cloned()
+            .collect()
+    }
+}
+
 pub async fn get_cards(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UserId>,
+    extract::Query(query): extract::Query<UserId>,
 ) -> Result<axum::Json<Vec<PowerCard>>, AppError> {
     let power_cards =
         sqlx::query_as("SELECT * FROM power_cards WHERE user_id = ($1) ORDER BY name")
-            .bind(payload.user_id)
+            .bind(query.user_id)
             .fetch_all(&pool)
             .await?;
 
     Ok(axum::Json(power_cards))
 }
 
-// Three (3) random cards per user, duplicates are allowed
-fn get_random_cards(amount: usize) -> Vec<String> {
-    let power_cards: Vec<String> = vec![
-        "Ancient's Protection".to_string(),
-        "Double-edged Sword".to_string(),
-        "Extra Wind".to_string(),
-        "Twist of Fate".to_string(),
-        "Viral x Rival".to_string(),
-        "Warlord's Domain".to_string(),
-    ];
-
-    let mut rng = rand::thread_rng();
-    power_cards
-        .choose_multiple(&mut rng, amount)
-        .cloned()
-        .collect()
-}
-
-#[derive(Debug, Deserialize, Serialize, FromRow)]
+#[derive(Debug, Deserialize)]
 pub struct InsertCard {
-    name: Option<String>,
+    name: Option<String>, // If the card is specified, only that card will be inserted
     user_id: uuid::Uuid,
-}
-
-#[derive(Debug, Deserialize, Serialize, FromRow)]
-pub struct CardAmount {
     amount: Option<usize>,
 }
+
+// #[derive(Debug, Deserialize)]
+// pub struct InsertCardQuery {
+// }
 
 // Extra Wind function already here
 // Could be better
 pub async fn insert_card(
     extract::State(pool): extract::State<PgPool>,
-    extract::Query(query): extract::Query<CardAmount>,
-    axum::Json(payload): axum::Json<InsertCard>,
+    extract::Json(payload): extract::Json<InsertCard>,
 ) -> Result<axum::Json<Vec<PowerCard>>, AppError> {
     match payload.name {
         Some(name) => {
@@ -83,8 +84,8 @@ pub async fn insert_card(
         }
         None => {
             let mut txn = pool.begin().await?;
-            let amount = query.amount.unwrap_or(3);
-            let random_cards = get_random_cards(amount);
+            let amount = payload.amount.unwrap_or(3);
+            let random_cards = PowerCard::get_random_cards(amount);
             let mut power_cards: Vec<PowerCard> = Vec::with_capacity(amount);
 
             for random_card in random_cards.iter() {
@@ -120,7 +121,7 @@ pub struct UpdateCard {
 
 pub async fn update_card(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UpdateCard>,
+    extract::Json(payload): extract::Json<UpdateCard>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query("UPDATE power_cards SET is_active = ($1), is_used = ($2) WHERE id = ($3) AND user_id = ($4)")
         .bind(payload.is_activated)
@@ -144,7 +145,7 @@ pub struct WarlordsDomainPayload {
 
 pub async fn warlords_domain(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<WarlordsDomainPayload>,
+    extract::Json(payload): extract::Json<WarlordsDomainPayload>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query(
         r#"
@@ -193,7 +194,7 @@ pub struct TwistOfFatePayload {
 // If they do, do not swap
 pub async fn twist_of_fate(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<TwistOfFatePayload>,
+    extract::Json(payload): extract::Json<TwistOfFatePayload>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query(
         r#"
@@ -239,7 +240,8 @@ pub async fn twist_of_fate(
     )
     .bind(payload.user_id)
     // .bind(payload.current_match_id)
-    .bind(payload.selected_opponent_id).execute(&pool)
+    .bind(payload.selected_opponent_id)
+    .execute(&pool)
     .await?;
 
     Ok(http::StatusCode::OK)
