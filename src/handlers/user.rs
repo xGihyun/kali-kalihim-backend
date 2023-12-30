@@ -31,29 +31,52 @@ pub struct User {
     banner_url: Option<String>,
 }
 
+// Fetch user without their sensitive info
+// NOTE: Unfortunately, I'm not sure if there is a good way to dynamically fetch specific columns using
+// SQLx
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct UserFetch {
+    id: uuid::Uuid,
+    section: String,
+    first_name: String,
+    last_name: String,
+    sex: i16,
+    rank_overall: i32,
+    rank_section: i32,
+    rank_title: Option<String>,
+    score: i32,
+    avatar_url: Option<String>,
+    banner_url: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UsersQuery {
     section: Option<String>,
-    order_by: bool,
+    order_by: Option<String>,
+    order: Option<String>,
 }
 
 // TODO: Improve filtering, use comma separated fields query to fetch specific columns only
 pub async fn get_users(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<UsersQuery>,
-) -> Result<axum::Json<Vec<User>>, AppError> {
+) -> Result<axum::Json<Vec<UserFetch>>, AppError> {
     let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
-        sqlx::QueryBuilder::new("SELECT * FROM users");
+        sqlx::QueryBuilder::new("SELECT id, section, first_name, last_name, sex, rank_overall, rank_section, rank_title, score, avatar_url, banner_url FROM users");
 
     if let Some(section) = query.section {
         query_builder.push(format!(" WHERE section = '{}'", section));
     }
 
-    if query.order_by {
-        query_builder.push(" ORDER BY score DESC");
+    if let Some(order_by) = query.order_by {
+        query_builder.push(format!(
+            " ORDER BY {} {}",
+            order_by,
+            query.order.unwrap_or("asc".to_string())
+        ));
     }
 
-    let users = sqlx::query_as::<_, User>(query_builder.sql())
+    let users = sqlx::query_as::<_, UserFetch>(query_builder.sql())
         .fetch_all(&pool)
         .await?;
 

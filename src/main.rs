@@ -13,6 +13,8 @@ use dotenv::dotenv;
 use std::env;
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::cors::CorsLayer;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 mod error;
 mod handlers;
@@ -22,6 +24,9 @@ use handlers::{card_battle, matchmake, power_card, score, section, user};
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
     dotenv().ok();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     let db_url = env::var("DATABASE_URL").context("DATABASE_URL env not found.")?;
     let ip_addr = env::var("IP_ADDRESS").unwrap_or("127.0.0.1".to_string());
@@ -43,6 +48,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/users/update", post(user::update_user))
         .route("/users/update/column", post(user::update_column))
         .route("/scores", patch(score::update_score))
+        // .route("/ranks", patch(score::update_ranks))
         // Matches
         .route("/matches", get(matchmake::get_matches))
         .route("/matches/update", post(matchmake::update_match_status))
@@ -63,17 +69,18 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             "/power_cards",
             get(power_card::get_cards)
                 .post(power_card::insert_card)
-                .patch(power_card::update_card),
+                .patch(power_card::update_cards),
         )
+        .route("/power_cards/:card_id", patch(power_card::update_card))
         // .route("/power_cards/update", post(power_card::update_card))
         // .route("/power_cards/insert", post(power_card::insert_card))
         .route(
             "/power_cards/warlords_domain",
-            post(power_card::warlords_domain),
+            patch(power_card::warlords_domain),
         )
         .route(
             "/power_cards/twist_of_fate",
-            post(power_card::twist_of_fate),
+            patch(power_card::twist_of_fate),
         )
         // Card Battle
         .route(
@@ -89,10 +96,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
 
     let listener = TcpListener::bind(format!("{}:8000", ip_addr)).await?;
 
-    println!(
-        "Server has started, listening on: {:?}\n",
-        listener.local_addr()?
-    );
+    info!("{:<12} - {}", "LISTENING", listener.local_addr()?);
 
     axum::serve(listener, app.into_make_service()).await?;
 

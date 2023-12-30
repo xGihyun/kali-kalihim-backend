@@ -33,15 +33,16 @@ pub struct Matchmake {
 
 pub async fn get_latest_match(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UserId>,
+    extract::Json(payload): extract::Json<UserId>,
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
     let latest_match = sqlx::query_as::<_, Matchmake>(
         r#"
-        SELECT *
-        FROM match_sets
-        WHERE og_user1_id = ($1) OR og_user2_id = ($1)
+        SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
+        FROM match_sets ms
+        JOIN users u1 ON user1_id = u1.id
+        JOIN users u2 ON user2_id = u2.id 
+        WHERE user1_id = ($1) OR user2_id = ($1)
         ORDER BY created_at DESC
-        -- LIMIT 1 
         "#,
     )
     .bind(payload.user_id)
@@ -69,11 +70,11 @@ pub async fn get_latest_opponent(
         WITH LatestMatch AS (
             SELECT
                 CASE
-                WHEN og_user1_id = ($1) THEN user2_id
+                WHEN user1_id = ($1) THEN user2_id
                 ELSE user1_id
                 END AS opponent_id
             FROM match_sets
-            WHERE og_user1_id = ($1) OR og_user2_id = ($1)
+            WHERE user1_id = ($1) OR user2_id = ($1)
             ORDER BY created_at DESC
             LIMIT 1
         )
@@ -115,8 +116,12 @@ pub async fn get_matches(
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
     let matches = sqlx::query_as::<_, Matchmake>(
         r#"
-      SELECT * FROM match_sets WHERE set = ($1) AND section = ($2)
-      "#,
+        SELECT *, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
+        FROM match_sets ms
+        JOIN users u1 ON user1_id = u1.id
+        JOIN users u2 ON user2_id = u2.id 
+        WHERE ms.set = ($1) AND ms.section = ($2)
+        "#,
     )
     .bind(query.set)
     .bind(query.section)
@@ -156,6 +161,8 @@ pub async fn matchmake(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<Arnis>,
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    let mut txn = pool.begin().await?;
+
     let match_pairs = sqlx::query_as::<_, Matchmake>(
         r#"
         WITH
@@ -167,7 +174,7 @@ pub async fn matchmake(
             WHERE section = ($1)
           ),
           PreviousMatches AS (
-            SELECT id, user1_id, user2_id, user1_first_name, user2_first_name, user1_last_name, user2_last_name
+            SELECT id, user1_id, user2_id
             FROM match_sets
             WHERE DATE_TRUNC('minute', created_at) = (SELECT latest_date FROM LatestMatch)
           ),
@@ -183,11 +190,7 @@ pub async fn matchmake(
             SELECT
               m.id AS match_id,
               m.user1_id,
-              m.user2_id,
-              m.user1_first_name,
-              m.user2_first_name,
-              m.user1_last_name,
-              m.user2_last_name
+              m.user2_id
             FROM
               PreviousMatches m
             JOIN ViralXRival vxr ON m.user1_id = vxr.user_id OR m.user2_id = vxr.user_id
@@ -203,23 +206,26 @@ pub async fn matchmake(
             WHERE section = ($1) AND pp.user1_id IS NULL
           )
         INSERT INTO match_sets (
-          user1_id, user2_id, og_user1_id, og_user2_id, user1_first_name, user1_last_name, user2_first_name, user2_last_name,
-          section, arnis_skill, arnis_footwork, og_arnis_skill, set
+          user1_id, 
+          user2_id, 
+          og_user1_id, 
+          og_user2_id,
+          section, 
+          arnis_skill, 
+          arnis_footwork, 
+          og_arnis_skill, 
+          set
         )
         SELECT
           u1.id AS user1_id,
           u2.id AS user2_id,
           u1.id AS og_user1_id,
           u2.id AS og_user2_id,
-          u1.first_name AS user1_first_name,
-          u1.last_name AS user1_last_name,
-          u2.first_name AS user2_first_name,
-          u2.last_name AS user2_last_name,
           ($1) AS section,
           ($2) AS arnis_skill,
           ($3) AS arnis_footwork,
           ($2) AS og_arnis_skill,
-          (SELECT set FROM LatestMatch) + 1 AS set       
+          (SELECT set FROM LatestMatch) + 1 AS set
          FROM
           RankedUsers u1
           JOIN RankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
@@ -233,24 +239,41 @@ pub async fn matchmake(
           user2_id,
           user1_id AS og_user1_id,
           user2_id AS og_user2_id,
-          user1_first_name,
-          user1_last_name,
-          user2_first_name,
-          user2_last_name,
           ($1) AS section,
           ($2) AS arnis_skill,
           ($3) AS arnis_footwork,
           ($2) AS og_arnis_skill,
-          (SELECT set FROM LatestMatch) + 1 AS set       
+          (SELECT set FROM LatestMatch) + 1 AS set
         FROM
           PersistedPairs
-        RETURNING *;
-        "#
+        RETURNING *,
+            (SELECT u1.first_name FROM users u1 WHERE u1.id = user1_id) AS user1_first_name,
+            (SELECT u1.last_name FROM users u1 WHERE u1.id = user1_id) AS user1_last_name,
+            (SELECT u2.first_name FROM users u2 WHERE u2.id = user2_id) AS user2_first_name,
+            (SELECT u2.last_name FROM users u2 WHERE u2.id = user2_id) AS user2_last_name
+        "#,
     )
-    .bind(payload.section)
+    .bind(&payload.section)
     .bind(payload.skill)
     .bind(payload.footwork)
-    .fetch_all(&pool).await?;
+    .fetch_all(&mut *txn)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE power_cards pc
+        SET is_used = true
+        FROM users u
+        WHERE pc.user_id = u.id AND u.section = ($1)
+        AND pc.is_active = true
+        AND pc.is_used = false
+        "#,
+    )
+    .bind(&payload.section)
+    .execute(&mut *txn)
+    .await?;
+
+    txn.commit().await?;
 
     Ok(axum::Json(match_pairs))
 }

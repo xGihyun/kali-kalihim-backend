@@ -15,28 +15,36 @@ pub struct UpdateScore {
     is_winner: bool,
 }
 
-// Query to update rankings
-// WITH OverallRank AS (
-//     SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
-//     FROM users
-// ), SectionRank AS (
-//     SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
-//     FROM users
-// )
-// UPDATE users u
-// SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
-// FROM OverallRank ovr, SectionRank sr
-// WHERE u.id = ovr.id AND u.id = sr.id
+pub async fn update_ranks(
+    extract::State(pool): extract::State<PgPool>,
+) -> Result<http::StatusCode, AppError> {
+    sqlx::query(
+        r#"
+        WITH OverallRank AS (
+            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
+            FROM users
+        ), SectionRank AS (
+            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
+            FROM users
+        )
+        UPDATE users u
+        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
+        FROM OverallRank ovr, SectionRank sr
+        WHERE u.id = ovr.id AND u.id = sr.id
+        "#,
+    )
+    .execute(&pool)
+    .await?;
 
-// Query to update activated power cards
-// UPDATE power_cards
-// SET is_used = TRUE
-// WHERE id = ($3) AND is_active = TRUE AND is_used = FALSE
+    Ok(http::StatusCode::OK)
+}
 
 pub async fn update_score(
     extract::State(pool): extract::State<PgPool>,
     extract::Json(payload): extract::Json<UpdateScore>,
 ) -> Result<http::StatusCode, AppError> {
+    let mut txn = pool.begin().await?;
+
     // current score + payload score
     sqlx::query(
         r#"
@@ -74,8 +82,28 @@ pub async fn update_score(
     .bind(payload.difference)
     .bind(payload.user_id)
     .bind(payload.is_winner)
-    .execute(&pool)
+    .execute(&mut *txn)
     .await?;
+
+    sqlx::query(
+        r#"
+        WITH OverallRank AS (
+            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
+            FROM users
+        ), SectionRank AS (
+            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
+            FROM users
+        )
+        UPDATE users u
+        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
+        FROM OverallRank ovr, SectionRank sr
+        WHERE u.id = ovr.id AND u.id = sr.id
+        "#,
+    )
+    .execute(&mut *txn)
+    .await?;
+
+    txn.commit().await?;
 
     Ok(http::StatusCode::OK)
 }

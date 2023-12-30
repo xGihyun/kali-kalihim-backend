@@ -111,9 +111,8 @@ pub async fn insert_card(
     }
 }
 
-#[derive(Debug, Deserialize, FromRow)]
+#[derive(Debug, Deserialize)]
 pub struct UpdateCard {
-    card_id: uuid::Uuid,
     user_id: uuid::Uuid,
     is_activated: bool,
     is_used: bool,
@@ -121,15 +120,35 @@ pub struct UpdateCard {
 
 pub async fn update_card(
     extract::State(pool): extract::State<PgPool>,
+    extract::Path(card_id): extract::Path<uuid::Uuid>,
     extract::Json(payload): extract::Json<UpdateCard>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query("UPDATE power_cards SET is_active = ($1), is_used = ($2) WHERE id = ($3) AND user_id = ($4)")
         .bind(payload.is_activated)
         .bind(payload.is_used)
-        .bind(payload.card_id)
+        .bind(card_id)
         .bind(payload.user_id)
         .execute(&pool)
         .await?;
+
+    Ok(http::StatusCode::OK)
+}
+
+pub async fn update_cards(
+    extract::State(pool): extract::State<PgPool>,
+) -> Result<http::StatusCode, AppError> {
+    sqlx::query(
+        r#"
+        UPDATE power_cards pc
+        SET is_used = true
+        FROM users u
+        WHERE pc.user_id = u.id
+        AND pc.is_active = true
+        AND pc.is_used = false
+        "#,
+    )
+    .execute(&pool)
+    .await?;
 
     Ok(http::StatusCode::OK)
 }
@@ -158,8 +177,6 @@ pub async fn warlords_domain(
                 END AS current_opponent_id
             FROM match_sets
             WHERE id = ($2)
-            ORDER BY created_at DESC
-            LIMIT 1
         )
         UPDATE match_sets AS ms
         SET 

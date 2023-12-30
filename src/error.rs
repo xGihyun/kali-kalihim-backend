@@ -2,6 +2,7 @@ use axum::{
     http,
     response::{IntoResponse, Response},
 };
+use tracing::debug;
 
 #[derive(Debug)]
 pub struct AppError {
@@ -38,7 +39,7 @@ impl From<anyhow::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        println!("->> {self:?}\n");
+        debug!("{} {:<12} - {}", "ERROR", self.code, self.message);
 
         (self.code, self.message).into_response()
     }
