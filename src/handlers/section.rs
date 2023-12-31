@@ -11,12 +11,44 @@ pub struct Section {
     user_limit: i32,
 }
 
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct SectionWithUserCount {
+    id: String,
+    name: String,
+    user_limit: i32,
+    user_count: i64,
+}
+
 pub async fn get_sections(
     extract::State(pool): extract::State<PgPool>,
 ) -> Result<axum::Json<Vec<Section>>, AppError> {
-    let sections = sqlx::query_as::<_, Section>("SELECT * FROM sections")
+    let sections = sqlx::query_as::<_, Section>("SELECT * FROM sections ORDER BY name")
         .fetch_all(&pool)
         .await?;
+
+    Ok(axum::Json(sections))
+}
+
+pub async fn get_sections_with_count(
+    extract::State(pool): extract::State<PgPool>,
+) -> Result<axum::Json<Vec<SectionWithUserCount>>, AppError> {
+    let sections = sqlx::query_as::<_, SectionWithUserCount>(
+        r#"
+        WITH UsersInSection AS (
+            SELECT section, COUNT(*) AS user_count 
+            FROM users 
+            GROUP BY section
+        )
+        SELECT 
+        s.*, 
+        COALESCE(uis.user_count, 0) AS user_count
+        FROM sections s
+        LEFT JOIN UsersInSection uis ON uis.section = s.id
+        ORDER BY name
+        "#,
+    )
+    .fetch_all(&pool)
+    .await?;
 
     Ok(axum::Json(sections))
 }
@@ -29,7 +61,7 @@ pub struct CreateSection {
 
 pub async fn insert_section(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<CreateSection>,
+    extract::Json(payload): extract::Json<CreateSection>,
 ) -> Result<axum::Json<Section>, AppError> {
     let section = sqlx::query_as::<_, Section>(
         r#"
@@ -47,3 +79,34 @@ pub async fn insert_section(
 }
 
 // TODO: Add update and delete functions
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteSection {
+    sections: String,
+}
+
+pub async fn delete_section(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Json(payload): extract::Json<DeleteSection>,
+) -> Result<http::StatusCode, AppError> {
+    let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
+        sqlx::QueryBuilder::new("DELETE FROM sections");
+
+    let sections: Vec<&str> = payload.sections.split(',').collect();
+
+    if sections.len() == 1 {
+        query_builder.push(format!(" WHERE id = '{}'", payload.sections));
+    } else {
+        let sections: Vec<String> = payload
+            .sections
+            .split(',')
+            .map(|s| format!("'{}'", s.trim()))
+            .collect();
+        let section_list = sections.join(", ");
+        query_builder.push(format!(" WHERE id IN ({})", section_list));
+    }
+
+    sqlx::query(query_builder.sql()).execute(&pool).await?;
+
+    Ok(http::StatusCode::NO_CONTENT)
+}

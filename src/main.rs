@@ -74,8 +74,11 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         // Section
         .route(
             "/sections",
-            get(section::get_sections).post(section::insert_section),
+            get(section::get_sections)
+                .post(section::insert_section)
+                .delete(section::delete_section),
         )
+        .route("/sections/count", get(section::get_sections_with_count))
         // Power Card
         .route(
             "/power_cards",
