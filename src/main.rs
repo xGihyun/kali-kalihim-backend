@@ -43,16 +43,28 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/register", post(user::register))
         // User
         .route("/users", get(user::get_users))
-        .route("/users/:user_id", get(user::get_user))
+        .route(
+            "/users/:user_id",
+            get(user::get_user).patch(user::update_user),
+        )
+        .route(
+            "/users/:user_id/private",
+            patch(user::update_private_status),
+        )
+        .route("/users/count", get(user::get_users_count))
         // Turn this into a patch
-        .route("/users/update", post(user::update_user))
+        // .route("/users/update", post(user::update_user))
         .route("/users/update/column", post(user::update_column))
         .route("/scores", patch(score::update_score))
         // .route("/ranks", patch(score::update_ranks))
         // Matches
         .route("/matches", get(matchmake::get_matches))
         .route("/matches/update", post(matchmake::update_match_status))
-        .route("/matches/latest", post(matchmake::get_latest_match))
+        .route("/matches/latest", post(matchmake::get_latest_matches))
+        .route(
+            "/matches/latest_date",
+            post(matchmake::get_latest_match_date),
+        )
         .route(
             "/matches/latest/:user_id",
             get(matchmake::get_latest_opponent),

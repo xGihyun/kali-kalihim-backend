@@ -29,6 +29,7 @@ pub struct User {
     role: String,
     avatar_url: Option<String>,
     banner_url: Option<String>,
+    is_private: bool,
 }
 
 // Fetch user without their sensitive info
@@ -54,6 +55,8 @@ pub struct UsersQuery {
     section: Option<String>,
     order_by: Option<String>,
     order: Option<String>,
+    limit: Option<u32>,
+    skip: Option<u32>,
 }
 
 // TODO: Improve filtering, use comma separated fields query to fetch specific columns only
@@ -65,7 +68,18 @@ pub async fn get_users(
         sqlx::QueryBuilder::new("SELECT id, section, first_name, last_name, sex, rank_overall, rank_section, rank_title, score, avatar_url, banner_url FROM users");
 
     if let Some(section) = query.section {
-        query_builder.push(format!(" WHERE section = '{}'", section));
+        let sections: Vec<&str> = section.split(',').collect();
+
+        if sections.len() == 1 {
+            query_builder.push(format!(" WHERE section = '{}'", section));
+        } else {
+            let sections: Vec<String> = section
+                .split(',')
+                .map(|s| format!("'{}'", s.trim()))
+                .collect();
+            let section_list = sections.join(", ");
+            query_builder.push(format!(" WHERE section IN ({})", section_list));
+        }
     }
 
     if let Some(order_by) = query.order_by {
@@ -76,11 +90,34 @@ pub async fn get_users(
         ));
     }
 
+    if let Some(limit) = query.limit {
+        query_builder.push(format!(" LIMIT {} ", limit,));
+    }
+
+    if let Some(skip) = query.skip {
+        query_builder.push(format!(" OFFSET {} ", skip,));
+    }
+
     let users = sqlx::query_as::<_, UserFetch>(query_builder.sql())
         .fetch_all(&pool)
         .await?;
 
     Ok(axum::Json(users))
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct UserCount {
+    total: i64,
+}
+
+pub async fn get_users_count(
+    extract::State(pool): extract::State<PgPool>,
+) -> Result<axum::Json<UserCount>, AppError> {
+    let total = sqlx::query_as::<_, UserCount>("SELECT COUNT(*) AS total FROM users")
+        .fetch_one(&pool)
+        .await?;
+
+    Ok(axum::Json(total))
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,36 +160,38 @@ pub async fn get_user(
 // For admin
 #[derive(Debug, Deserialize)]
 pub struct UpdateUser {
-    id: uuid::Uuid,
-    email: String,
-    section: String,
-    first_name: String,
-    last_name: String,
-    age: i32,
-    contact_number: i32,
-    sex: i16,
-    score: i32,
-    role: String,
+    email: Option<String>,
+    section: Option<String>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    age: Option<i32>,
+    contact_number: Option<i32>,
+    sex: Option<i16>,
+    score: Option<i32>,
+    role: Option<String>,
 }
 
 pub async fn update_user(
     extract::State(pool): extract::State<PgPool>,
+    extract::Path(user_id): extract::Path<uuid::Uuid>,
     extract::Json(payload): extract::Json<UpdateUser>,
 ) -> Result<http::StatusCode, AppError> {
+    let mut txn = pool.begin().await?;
+
     sqlx::query(
         r#"
         UPDATE users 
         SET 
-            email = ($1), 
-            section = ($2), 
-            first_name = ($3), 
-            last_name = ($4),
-            age = ($5),
-            sex = ($6),
-            contact_number = ($7),
-            score = ($8),
-            role = ($9)
-        WHERE id = ($10)
+            email = COALESCE(NULLIF($1, ''), email), 
+            section = COALESCE(NULLIF($2, ''), section), 
+            first_name = COALESCE(NULLIF($3, ''), first_name), 
+            last_name = COALESCE(NULLIF($4, ''), last_name),
+            age = COALESCE($5, age),
+            sex = COALESCE($6, sex),
+            contact_number = COALESCE($7, contact_number),
+            score = COALESCE($8, score),
+            role = COALESCE(NULLIF($9, ''), role)
+        WHERE id = ($10);
         "#,
     )
     .bind(payload.email)
@@ -164,9 +203,29 @@ pub async fn update_user(
     .bind(payload.contact_number)
     .bind(payload.score)
     .bind(payload.role)
-    .bind(payload.id)
-    .execute(&pool)
+    .bind(user_id)
+    .execute(&mut *txn)
     .await?;
+
+    sqlx::query(
+        r#"
+        WITH OverallRank AS (
+            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
+            FROM users
+        ), SectionRank AS (
+            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
+            FROM users
+        )
+        UPDATE users u
+        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
+        FROM OverallRank ovr, SectionRank sr
+        WHERE u.id = ovr.id AND u.id = sr.id
+        "#,
+    )
+    .execute(&mut *txn)
+    .await?;
+
+    txn.commit().await?;
 
     Ok(http::StatusCode::OK)
 }
@@ -193,6 +252,25 @@ pub async fn update_column(
     sqlx::query(sql.as_str())
         .bind(payload.url)
         .bind(payload.user_id)
+        .execute(&pool)
+        .await?;
+
+    Ok(http::StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePrivateStatus {
+    is_private: bool,
+}
+
+pub async fn update_private_status(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Path(user_id): extract::Path<uuid::Uuid>,
+    extract::Json(payload): extract::Json<UpdatePrivateStatus>,
+) -> Result<http::StatusCode, AppError> {
+    sqlx::query("UPDATE users SET is_private = ($1) WHERE id = ($2)")
+        .bind(payload.is_private)
+        .bind(user_id)
         .execute(&pool)
         .await?;
 

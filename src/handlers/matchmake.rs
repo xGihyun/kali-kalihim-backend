@@ -31,22 +31,60 @@ pub struct Matchmake {
     user2_total_damage: Option<f32>,
 }
 
-pub async fn get_latest_match(
+#[derive(Debug, Deserialize)]
+pub struct UserMatchQuery {
+    fields: Option<String>,
+    limit: Option<i32>,
+}
+
+// This can be merged with get_matches()
+pub async fn get_latest_matches(
     extract::State(pool): extract::State<PgPool>,
+    extract::Query(query): extract::Query<UserMatchQuery>,
     extract::Json(payload): extract::Json<UserId>,
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
-    let latest_match = sqlx::query_as::<_, Matchmake>(
-        r#"
+    let mut sql = r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
         FROM match_sets ms
         JOIN users u1 ON user1_id = u1.id
         JOIN users u2 ON user2_id = u2.id 
         WHERE user1_id = ($1) OR user2_id = ($1)
         ORDER BY created_at DESC
+        "#.to_string();
+
+    if let Some(limit) = query.limit {
+        sql.push_str(format!(" LIMIT {} ", limit).as_str());
+    }
+
+    let latest_match = sqlx::query_as::<_, Matchmake>(sql.as_str())
+        .bind(payload.user_id)
+        .fetch_all(&pool)
+        .await?;
+
+    Ok(axum::Json(latest_match))
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct MatchDate {
+    created_at: chrono::DateTime<chrono::Utc>,
+    card_deadline: chrono::DateTime<chrono::Utc>,
+}
+
+pub async fn get_latest_match_date(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Json(payload): extract::Json<UserId>,
+) -> Result<axum::Json<Option<MatchDate>>, AppError> {
+    let latest_match = sqlx::query_as::<_, MatchDate>(
+        r#"
+        SELECT created_at, card_deadline
+        FROM match_sets
+        WHERE user1_id = ($1) OR user2_id = ($1)
+        ORDER BY created_at DESC
+        LIMIT 1
         "#,
     )
     .bind(payload.user_id)
-    .fetch_all(&pool)
+    .fetch_optional(&pool)
     .await?;
 
     Ok(axum::Json(latest_match))
@@ -110,6 +148,7 @@ pub struct MatchQuery {
     pub section: String,
 }
 
+// This can be merged with get_latest_match()
 pub async fn get_matches(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<MatchQuery>,
@@ -152,100 +191,120 @@ pub async fn get_max_sets(
 #[derive(Debug, Deserialize)]
 pub struct Arnis {
     section: String,
-    skill: String,
+    // skill: String,
     footwork: String,
 }
 
 // TODO: Admin will choose skill, footwork is randomized (or vice versa?)
 pub async fn matchmake(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<Arnis>,
+    extract::Json(payload): extract::Json<Arnis>,
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
     let mut txn = pool.begin().await?;
 
     let match_pairs = sqlx::query_as::<_, Matchmake>(
         r#"
         WITH
-          LatestMatch AS (
+        LatestMatch AS (
             SELECT 
                 MAX(DATE_TRUNC('minute', created_at)) AS latest_date,
                 COUNT(DISTINCT created_at) AS set
             FROM match_sets
             WHERE section = ($1)
-          ),
-          PreviousMatches AS (
+        ),
+        PreviousMatches AS (
             SELECT id, user1_id, user2_id
             FROM match_sets
             WHERE DATE_TRUNC('minute', created_at) = (SELECT latest_date FROM LatestMatch)
-          ),
-          ViralXRival AS (
+        ),
+        ViralXRival AS (
             SELECT user_id
             FROM power_cards
             WHERE
                 name = 'Viral x Rival'
                 AND is_active = TRUE 
                 AND is_used = FALSE
-          ),
-          PersistedPairs AS (
+        ),
+        PersistedPairs AS (
             SELECT
-              m.id AS match_id,
-              m.user1_id,
-              m.user2_id
+                m.id AS match_id,
+                m.user1_id,
+                m.user2_id
             FROM
-              PreviousMatches m
+                PreviousMatches m
             JOIN ViralXRival vxr ON m.user1_id = vxr.user_id OR m.user2_id = vxr.user_id
-          ),
-          RankedUsers AS (
+        ),
+        RankedUsers AS (
             SELECT
-              id,
-              first_name,
-              last_name,
-              row_number() OVER (ORDER BY random()) AS user_rank
+                id,
+                first_name,
+                last_name,
+                row_number() OVER (ORDER BY random()) AS user_rank
             FROM users u
             LEFT JOIN PersistedPairs pp ON u.id = pp.user1_id OR u.id = pp.user2_id
             WHERE section = ($1) AND pp.user1_id IS NULL
-          )
+        )
         INSERT INTO match_sets (
-          user1_id, 
-          user2_id, 
-          og_user1_id, 
-          og_user2_id,
-          section, 
-          arnis_skill, 
-          arnis_footwork, 
-          og_arnis_skill, 
-          set
+            user1_id, 
+            user2_id, 
+            og_user1_id, 
+            og_user2_id,
+            section, 
+            arnis_skill, 
+            arnis_footwork, 
+            og_arnis_skill, 
+            set
         )
         SELECT
-          u1.id AS user1_id,
-          u2.id AS user2_id,
-          u1.id AS og_user1_id,
-          u2.id AS og_user2_id,
-          ($1) AS section,
-          ($2) AS arnis_skill,
-          ($3) AS arnis_footwork,
-          ($2) AS og_arnis_skill,
-          (SELECT set FROM LatestMatch) + 1 AS set
-         FROM
-          RankedUsers u1
-          JOIN RankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
+            u1.id AS user1_id,
+            u2.id AS user2_id,
+            u1.id AS og_user1_id,
+            u2.id AS og_user2_id,
+            ($1) AS section,
+            rs.random_skill AS arnis_skill,
+            ($2) AS arnis_footwork,
+            rs.random_skill AS og_arnis_skill,
+            (SELECT set FROM LatestMatch) + 1 AS set
+        FROM
+            RankedUsers u1
+            JOIN RankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
+        CROSS JOIN LATERAL (
+            SELECT
+                CASE 
+                    WHEN random() < 0.2 THEN 'strikes'
+                    WHEN random() < 0.4 THEN 'blocks'
+                    WHEN random() < 0.6 THEN 'forward_sinawali'
+                    WHEN random() < 0.8 THEN 'sideward_sinawali'
+                    ELSE 'reversed_sinawali'
+                END AS random_skill
+        ) AS rs
         WHERE
-          u2.user_rank % 2 = 0
+            u2.user_rank % 2 = 0
 
         UNION
 
         SELECT
-          user1_id,
-          user2_id,
-          user1_id AS og_user1_id,
-          user2_id AS og_user2_id,
-          ($1) AS section,
-          ($2) AS arnis_skill,
-          ($3) AS arnis_footwork,
-          ($2) AS og_arnis_skill,
-          (SELECT set FROM LatestMatch) + 1 AS set
+            user1_id,
+            user2_id,
+            user1_id AS og_user1_id,
+            user2_id AS og_user2_id,
+            ($1) AS section,
+            rs.random_skill AS arnis_skill,
+            ($2) AS arnis_footwork,
+            rs.random_skill AS og_arnis_skill,
+            (SELECT set FROM LatestMatch) + 1 AS set
         FROM
-          PersistedPairs
+            PersistedPairs
+        CROSS JOIN LATERAL (
+            SELECT
+                CASE 
+                    WHEN random() < 0.2 THEN 'strikes'
+                    WHEN random() < 0.4 THEN 'blocks'
+                    WHEN random() < 0.6 THEN 'forward_sinawali'
+                    WHEN random() < 0.8 THEN 'sideward_sinawali'
+                    ELSE 'reversed_sinawali'
+                END AS random_skill
+        ) AS rs
         RETURNING *,
             (SELECT u1.first_name FROM users u1 WHERE u1.id = user1_id) AS user1_first_name,
             (SELECT u1.last_name FROM users u1 WHERE u1.id = user1_id) AS user1_last_name,
@@ -254,7 +313,6 @@ pub async fn matchmake(
         "#,
     )
     .bind(&payload.section)
-    .bind(payload.skill)
     .bind(payload.footwork)
     .fetch_all(&mut *txn)
     .await?;
