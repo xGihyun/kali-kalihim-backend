@@ -42,7 +42,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         // .route("/login", post(user::login))
         .route("/register", post(user::register))
         // User
-        .route("/users", get(user::get_users))
+        .route("/users", get(user::get_users).delete(user::delete_users))
         .route(
             "/users/:user_id",
             get(user::get_user).patch(user::update_user),

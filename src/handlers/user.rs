@@ -328,3 +328,98 @@ pub async fn register(
         },
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteUserQuery {
+    force: bool,
+}
+
+pub async fn delete_users(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Query(query): extract::Query<DeleteUserQuery>,
+    extract::Json(users): extract::Json<Vec<String>>,
+) -> Result<http::StatusCode, AppError> {
+    let mut txn = pool.begin().await?;
+    let users: Vec<String> = users
+        .into_iter()
+        .map(|user_id| format!("'{}'", user_id))
+        .collect();
+
+    let comma_sep_users = users.join(", ");
+
+    if query.force {
+        // Delete battle cards
+        sqlx::query(
+            format!(
+                "DELETE FROM battle_cards WHERE user_id IN ({})",
+                comma_sep_users
+            )
+            .as_str(),
+        )
+        .execute(&mut *txn)
+        .await?;
+
+        // Delete card battle history
+        sqlx::query(
+            format!(
+                "DELETE FROM card_battle_history WHERE user_id IN ({})",
+                comma_sep_users
+            )
+            .as_str(),
+        )
+        .execute(&mut *txn)
+        .await?;
+
+        // Delete matches
+        // NOTE: DANGEREOUS: If users have been swapped via twist of fate, it will delete the copy of
+        // the orginal match
+        sqlx::query(
+            format!(
+                "DELETE FROM match_sets WHERE user1_id IN ({}) OR user2_id IN ({})",
+                comma_sep_users, comma_sep_users
+            )
+            .as_str(),
+        )
+        .execute(&mut *txn)
+        .await?;
+    }
+
+    // Delete power card
+    sqlx::query(
+        format!(
+            "DELETE FROM power_cards WHERE user_id IN ({})",
+            comma_sep_users
+        )
+        .as_str(),
+    )
+    .execute(&mut *txn)
+    .await?;
+
+    // Delete user
+    let res = sqlx::query(format!("DELETE FROM users WHERE id IN ({})", comma_sep_users).as_str())
+        .execute(&mut *txn)
+        .await;
+
+    // Could implement a default trait for AppError
+    match res {
+        Ok(_) => txn.commit().await?,
+        Err(err) => match err {
+            sqlx::Error::Database(db_err) => match db_err.kind() {
+                sqlx::error::ErrorKind::ForeignKeyViolation => Err(AppError::new(
+                    http::StatusCode::CONFLICT,
+                    format!("SQLx Error: {}", db_err),
+                )),
+                _ => Err(AppError::new(
+                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("SQLx Error: {}", db_err),
+                )),
+            },
+            _ => Err(AppError::new(
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("SQLx Error: {}", err),
+            )),
+        }?,
+    };
+
+    Ok(http::StatusCode::NO_CONTENT)
+}

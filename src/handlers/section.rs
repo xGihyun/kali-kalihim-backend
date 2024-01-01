@@ -80,30 +80,20 @@ pub async fn insert_section(
 
 // TODO: Add update and delete functions
 
-#[derive(Debug, Deserialize)]
-pub struct DeleteSection {
-    sections: String,
-}
-
 pub async fn delete_section(
     extract::State(pool): extract::State<PgPool>,
-    extract::Json(payload): extract::Json<DeleteSection>,
+    extract::Json(sections): extract::Json<Vec<String>>,
 ) -> Result<http::StatusCode, AppError> {
     let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
         sqlx::QueryBuilder::new("DELETE FROM sections");
 
-    let sections: Vec<&str> = payload.sections.split(',').collect();
-
     if sections.len() == 1 {
-        query_builder.push(format!(" WHERE id = '{}'", payload.sections));
+        query_builder.push(format!(" WHERE id = '{}'", &sections[0]));
     } else {
-        let sections: Vec<String> = payload
-            .sections
-            .split(',')
-            .map(|s| format!("'{}'", s.trim()))
-            .collect();
-        let section_list = sections.join(", ");
-        query_builder.push(format!(" WHERE id IN ({})", section_list));
+        let sections: Vec<String> = sections.iter().map(|s| format!("'{}'", s.trim())).collect();
+
+        let sections_comma_sep = sections.join(", ");
+        query_builder.push(format!(" WHERE id IN ({})", sections_comma_sep));
     }
 
     sqlx::query(query_builder.sql()).execute(&pool).await?;

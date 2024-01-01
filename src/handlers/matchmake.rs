@@ -239,10 +239,22 @@ pub async fn matchmake(
                 id,
                 first_name,
                 last_name,
-                row_number() OVER (ORDER BY random()) AS user_rank
+                row_number() OVER (ORDER BY random()) AS user_rank,
+                COUNT(*) OVER() AS total_users
             FROM users u
             LEFT JOIN PersistedPairs pp ON u.id = pp.user1_id OR u.id = pp.user2_id
-            WHERE section = ($1) AND pp.user1_id IS NULL
+            WHERE section = ($1) AND pp.user1_id IS NULL AND role = 'user'
+        ),
+        AdjustedRankedUsers AS (
+            SELECT 
+                id,
+                first_name,
+                last_name,
+                user_rank,
+                total_users,
+                -- Exclude the highest-ranked user if there's an odd number of users
+                CASE WHEN total_users % 2 <> 0 AND user_rank = total_users THEN TRUE ELSE FALSE END AS is_excluded
+            FROM RankedUsers
         )
         INSERT INTO match_sets (
             user1_id, 
@@ -266,20 +278,21 @@ pub async fn matchmake(
             rs.random_skill AS og_arnis_skill,
             (SELECT set FROM LatestMatch) + 1 AS set
         FROM
-            RankedUsers u1
-            JOIN RankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
-        CROSS JOIN LATERAL (
-            SELECT
-                CASE 
-                    WHEN random() < 0.2 THEN 'strikes'
-                    WHEN random() < 0.4 THEN 'blocks'
-                    WHEN random() < 0.6 THEN 'forward_sinawali'
-                    WHEN random() < 0.8 THEN 'sideward_sinawali'
-                    ELSE 'reversed_sinawali'
-                END AS random_skill
-        ) AS rs
-        WHERE
-            u2.user_rank % 2 = 0
+            AdjustedRankedUsers u1
+        JOIN AdjustedRankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
+            CROSS JOIN LATERAL (
+                SELECT
+                    CASE 
+                        WHEN random() < 0.2 THEN 'strikes'
+                        WHEN random() < 0.4 THEN 'blocks'
+                        WHEN random() < 0.6 THEN 'forward_sinawali'
+                        WHEN random() < 0.8 THEN 'sideward_sinawali'
+                        ELSE 'reversed_sinawali'
+                    END AS random_skill
+            ) AS rs
+        -- Exclude rows where either user is marked for exclusion
+        WHERE u1.is_excluded = FALSE AND u2.is_excluded = FALSE
+        AND u2.user_rank % 2 = 0
 
         UNION
 

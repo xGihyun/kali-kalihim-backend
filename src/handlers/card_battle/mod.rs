@@ -3,6 +3,7 @@
 use axum::{extract, http, response::Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, PgPool};
+use tracing::{info, warn};
 
 use crate::error::AppError;
 
@@ -130,7 +131,7 @@ async fn get_cards(
                 }
             }
             _ => {
-                println!("Unknown skill.");
+                warn!("Unknown skill.");
             }
         }
     }
@@ -156,8 +157,8 @@ pub async fn card_battle(
     .await?;
 
     for (i, (match_set_id, user1_id, user2_id)) in matches.iter().enumerate() {
-        println!("\n----- MATCH START -----\n");
-        println!("{match_set_id}");
+        info!("----- MATCH START -----");
+        info!("{match_set_id}");
 
         // Each user can only have 6 cards
         let user1_cards = get_cards(&pool, &user1_id, &match_set_id).await?;
@@ -181,10 +182,10 @@ pub async fn card_battle(
 
         // For debugging purposes
         if i == 0 {
-            println!(">> User1: {}\n", user1_id);
-            println!("{:?}\n\n", battle_results.user1);
-            println!(">> User2: {}\n", user2_id);
-            println!("{:?}\n\n", battle_results.user2);
+            info!(">> User1: {}\n", user1_id);
+            info!("{:?}\n\n", battle_results.user1);
+            info!(">> User2: {}\n", user2_id);
+            info!("{:?}\n\n", battle_results.user2);
         }
     }
 
