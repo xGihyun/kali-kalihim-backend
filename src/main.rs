@@ -30,9 +30,12 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
 
     let db_url = env::var("DATABASE_URL").context("DATABASE_URL env not found.")?;
     let ip_addr = env::var("IP_ADDRESS").unwrap_or("127.0.0.1".to_string());
+    let max_connections = env::var("MAX_CONNECTIONS")
+        .unwrap_or("10".to_string())
+        .parse::<u32>()?;
 
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(max_connections)
         .connect(&db_url)
         .await?;
 
@@ -52,14 +55,17 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             patch(user::update_private_status),
         )
         .route("/users/count", get(user::get_users_count))
-        // Turn this into a patch
-        // .route("/users/update", post(user::update_user))
+        // Could be way better
         .route("/users/update/column", post(user::update_column))
         .route("/scores", patch(score::update_score))
         // .route("/ranks", patch(score::update_ranks))
         // Matches
         .route("/matches", get(matchmake::get_matches))
-        .route("/matches/update", post(matchmake::update_match_status))
+        .route(
+            "/matches/:match_set_id",
+            patch(matchmake::update_match_status),
+        )
+        // .route("/matches/update", post(matchmake::update_match_status))
         .route("/matches/latest", post(matchmake::get_latest_matches))
         .route(
             "/matches/latest_date",
@@ -89,6 +95,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/power_cards/:card_id", patch(power_card::update_card))
         // .route("/power_cards/update", post(power_card::update_card))
         // .route("/power_cards/insert", post(power_card::insert_card))
+        // NOTE: These should be query params instead
         .route(
             "/power_cards/warlords_domain",
             patch(power_card::warlords_domain),

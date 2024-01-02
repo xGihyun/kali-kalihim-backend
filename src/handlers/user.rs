@@ -2,7 +2,8 @@ use axum::response::Result;
 use axum::{extract, http};
 use chrono::format;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
+use sqlx::Row;
 use sqlx::{prelude::FromRow, PgPool};
 
 use crate::error::AppError;
@@ -57,34 +58,42 @@ pub struct UsersQuery {
     order: Option<String>,
     limit: Option<u32>,
     skip: Option<u32>,
+    fields: Option<String>,
 }
 
-// TODO: Improve filtering, use comma separated fields query to fetch specific columns only
 pub async fn get_users(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<UsersQuery>,
-) -> Result<axum::Json<Vec<UserFetch>>, AppError> {
+) -> Result<axum::Json<Value>, AppError> {
     let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
-        sqlx::QueryBuilder::new("SELECT id, section, first_name, last_name, sex, rank_overall, rank_section, rank_title, score, avatar_url, banner_url FROM users");
+        sqlx::QueryBuilder::new(" SELECT ");
+
+    if let Some(fields) = query.fields.as_ref() {
+        query_builder.push(fields);
+    } else {
+        query_builder.push(" * ");
+    }
+
+    query_builder.push(" FROM users ");
 
     if let Some(section) = query.section {
         let sections: Vec<&str> = section.split(',').collect();
 
         if sections.len() == 1 {
-            query_builder.push(format!(" WHERE section = '{}'", section));
+            query_builder.push(format!(" WHERE section = '{}' ", section));
         } else {
             let sections: Vec<String> = section
                 .split(',')
                 .map(|s| format!("'{}'", s.trim()))
                 .collect();
             let section_list = sections.join(", ");
-            query_builder.push(format!(" WHERE section IN ({})", section_list));
+            query_builder.push(format!(" WHERE section IN ({}) ", section_list));
         }
     }
 
     if let Some(order_by) = query.order_by {
         query_builder.push(format!(
-            " ORDER BY {} {}",
+            " ORDER BY {} {} ",
             order_by,
             query.order.unwrap_or("asc".to_string())
         ));
@@ -98,12 +107,97 @@ pub async fn get_users(
         query_builder.push(format!(" OFFSET {} ", skip,));
     }
 
-    let users = sqlx::query_as::<_, UserFetch>(query_builder.sql())
-        .fetch_all(&pool)
-        .await?;
+    if let Some(fields) = query.fields.as_ref() {
+        let pg_rows = sqlx::query(query_builder.sql()).fetch_all(&pool).await?;
+        let fields: Vec<&str> = fields.split(',').collect();
 
-    Ok(axum::Json(users))
+        let mut json_vec: Vec<Value> = Vec::new();
+
+        for row in pg_rows.iter() {
+            let mut json_row = serde_json::Map::new();
+
+            for field in fields.iter() {
+                let value: Value = if let Ok(val) = row.try_get::<Option<uuid::Uuid>, _>(*field) {
+                    json!(val)
+                } else if let Ok(val) = row.try_get::<Option<String>, _>(*field) {
+                    json!(val)
+                } else if let Ok(val) = row.try_get::<Option<i16>, _>(*field) {
+                    json!(val)
+                } else if let Ok(val) = row.try_get::<Option<i32>, _>(*field) {
+                    json!(val)
+                } else if let Ok(val) = row.try_get::<Option<f64>, _>(*field) {
+                    json!(val)
+                } else {
+                    json!(null)
+                };
+
+                json_row.insert(field.to_string(), value);
+            }
+
+            let json = serde_json::to_value(json_row)?;
+
+            json_vec.push(json);
+        }
+
+        let values = serde_json::to_value(json_vec)?;
+
+        Ok(axum::Json(values))
+    } else {
+        let users = sqlx::query_as::<_, User>(query_builder.sql())
+            .fetch_all(&pool)
+            .await?;
+
+        let values = serde_json::to_value(users)?;
+
+        Ok(axum::Json(values))
+    }
 }
+
+// TODO: Improve filtering, use comma separated fields query to fetch specific columns only
+// pub async fn get_users(
+//     extract::State(pool): extract::State<PgPool>,
+//     extract::Query(query): extract::Query<UsersQuery>,
+// ) -> Result<axum::Json<Vec<UserFetch>>, AppError> {
+//     let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
+//         sqlx::QueryBuilder::new("SELECT id, section, first_name, last_name, sex, rank_overall, rank_section, rank_title, score, avatar_url, banner_url FROM users");
+//
+//     if let Some(section) = query.section {
+//         let sections: Vec<&str> = section.split(',').collect();
+//
+//         if sections.len() == 1 {
+//             query_builder.push(format!(" WHERE section = '{}'", section));
+//         } else {
+//             let sections: Vec<String> = section
+//                 .split(',')
+//                 .map(|s| format!("'{}'", s.trim()))
+//                 .collect();
+//             let section_list = sections.join(", ");
+//             query_builder.push(format!(" WHERE section IN ({})", section_list));
+//         }
+//     }
+//
+//     if let Some(order_by) = query.order_by {
+//         query_builder.push(format!(
+//             " ORDER BY {} {}",
+//             order_by,
+//             query.order.unwrap_or("asc".to_string())
+//         ));
+//     }
+//
+//     if let Some(limit) = query.limit {
+//         query_builder.push(format!(" LIMIT {} ", limit,));
+//     }
+//
+//     if let Some(skip) = query.skip {
+//         query_builder.push(format!(" OFFSET {} ", skip,));
+//     }
+//
+//     let users = sqlx::query_as::<_, UserFetch>(query_builder.sql())
+//         .fetch_all(&pool)
+//         .await?;
+//
+//     Ok(axum::Json(users))
+// }
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct UserCount {
@@ -143,7 +237,7 @@ pub async fn get_user(
         .bind(user_id)
         .fetch_one(&pool)
         .await?;
-        let user_value = serde_json::to_value(user).unwrap();
+        let user_value = serde_json::to_value(user)?;
 
         Ok(axum::Json(user_value))
     } else {
@@ -151,7 +245,7 @@ pub async fn get_user(
             .bind(user_id)
             .fetch_one(&pool)
             .await?;
-        let user_value = serde_json::to_value(user).unwrap();
+        let user_value = serde_json::to_value(user)?;
 
         Ok(axum::Json(user_value))
     }

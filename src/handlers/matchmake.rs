@@ -125,17 +125,17 @@ pub async fn get_latest_opponent(
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateMatchStatus {
-    match_set_id: uuid::Uuid,
     status: String,
 }
 
 pub async fn update_match_status(
     extract::State(pool): extract::State<PgPool>,
-    axum::Json(payload): axum::Json<UpdateMatchStatus>,
+    extract::Path(match_set_id): extract::Path<uuid::Uuid>,
+    extract::Json(payload): extract::Json<UpdateMatchStatus>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query("UPDATE match_sets SET status = ($1) WHERE id = ($2)")
         .bind(payload.status)
-        .bind(payload.match_set_id)
+        .bind(match_set_id)
         .execute(&pool)
         .await?;
 
@@ -155,7 +155,7 @@ pub async fn get_matches(
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
     let matches = sqlx::query_as::<_, Matchmake>(
         r#"
-        SELECT *, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
+        SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
         FROM match_sets ms
         JOIN users u1 ON user1_id = u1.id
         JOIN users u2 ON user2_id = u2.id 

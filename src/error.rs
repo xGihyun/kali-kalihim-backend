@@ -19,11 +19,21 @@ impl AppError {
     }
 }
 
+impl From<serde_json::error::Error> for AppError {
+    fn from(error: serde_json::error::Error) -> Self {
+        AppError {
+            code: http::StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("Serde JSON Error:\n{}", error),
+        }
+    }
+}
+
+// NOTE: Pattern match for all error types with their respective status codes
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
         AppError {
             code: http::StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("SQLx Error: {}", error),
+            message: format!("SQLx Error:\n{}", error),
         }
     }
 }
@@ -32,7 +42,7 @@ impl From<anyhow::Error> for AppError {
     fn from(error: anyhow::Error) -> Self {
         AppError {
             code: http::StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("Anyhow Error: {}", error),
+            message: format!("Anyhow Error:\n{}", error),
         }
     }
 }
