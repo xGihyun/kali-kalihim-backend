@@ -1,6 +1,6 @@
 // Ignore unused imports for now to remove some noise
-#![allow(unused_imports)]
-#![allow(warnings)]
+// #![allow(unused_imports)]
+// #![allow(warnings)]
 
 use anyhow::Context;
 use axum::{

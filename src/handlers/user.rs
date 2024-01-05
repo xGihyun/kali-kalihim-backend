@@ -412,12 +412,12 @@ pub async fn register(
                 http::StatusCode::CONFLICT,
                 format!(
                     "Failed to register. Check if user already exists: {}",
-                    db_err.to_string()
+                    db_err
                 ),
             )),
             _ => Err(AppError::new(
                 http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to register: {}", err.to_string()),
+                format!("Failed to register: {}", err),
             )),
         },
     }

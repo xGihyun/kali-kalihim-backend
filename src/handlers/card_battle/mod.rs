@@ -2,14 +2,14 @@
 
 use axum::{extract, http, response::Result};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, PgConnection, PgPool};
+use sqlx::{FromRow, PgPool};
 use tracing::{info, warn};
 
 use crate::error::AppError;
 
 use self::model::{
-    BattleCard, Block, Card, Change, CreateBattleCard, Effect, Multiplier, PlayerTurn,
-    PlayerTurnResults, Stat, Strike, Target, UserStatus,
+    Block, Card, CreateBattleCard, Effect, PlayerTurn, PlayerTurnResults, Strike, Target,
+    UserStatus,
 };
 
 use super::matchmake::MatchQuery;
@@ -161,8 +161,8 @@ pub async fn card_battle(
         info!("{match_set_id}");
 
         // Each user can only have 6 cards
-        let user1_cards = get_cards(&pool, &user1_id, &match_set_id).await?;
-        let user2_cards = get_cards(&pool, &user2_id, &match_set_id).await?;
+        let user1_cards = get_cards(&pool, user1_id, match_set_id).await?;
+        let user2_cards = get_cards(&pool, user2_id, match_set_id).await?;
 
         let mut user1_turns: Vec<PlayerTurn> = vec![PlayerTurn::default(); NUMBER_OF_CARDS];
         let mut user2_turns: Vec<PlayerTurn> = vec![PlayerTurn::default(); NUMBER_OF_CARDS];
@@ -170,7 +170,7 @@ pub async fn card_battle(
         player_turn(
             (&user1_cards, &user2_cards),
             (&mut user1_turns, &mut user2_turns),
-        );
+        )?;
 
         let battle_results = PlayerTurnResults {
             user1: (*user1_id, user1_turns),
@@ -255,7 +255,7 @@ async fn insert_turns(
     match_set_id: &uuid::Uuid,
     pool: &PgPool, // txn: &mut PgConnection,
 ) -> Result<(), AppError> {
-    if let Some(_) = &turns[0].card_name {
+    if turns[0].card_name.is_some() {
         let mut txn = pool.begin().await?;
 
         let sql = r#"
@@ -309,8 +309,8 @@ fn player_turn(
     (user1_turns, user2_turns): (&mut Vec<PlayerTurn>, &mut Vec<PlayerTurn>),
 ) -> anyhow::Result<(), AppError> {
     let (mut user1_status, mut user2_status) = (UserStatus::default(), UserStatus::default());
-    let (mut user1_status_temp, mut user2_status_temp) =
-        (UserStatus::default(), UserStatus::default());
+    // let (mut user1_status_temp, mut user2_status_temp) =
+    //     (UserStatus::default(), UserStatus::default());
 
     let (mut prev_effect1, mut prev_effect2): (Option<Effect>, Option<Effect>) = (None, None);
 
@@ -326,8 +326,8 @@ fn player_turn(
         // println!(">> User 1 Current Status: {:?}\n", user1_status);
         // println!(">> User 2 Current Status: {:?}\n", user2_status);
 
-        user1_status_temp = user1_status.clone();
-        user2_status_temp = user2_status.clone();
+        // user1_status_temp = user1_status.clone();
+        // user2_status_temp = user2_status.clone();
 
         // Change multipliers
         apply_effects(
@@ -383,7 +383,7 @@ fn player_turn(
         // println!(">> User 2 Current Status: {:?}\n\n", user2_status);
 
         match prev_effect1 {
-            Some(effect) => {
+            Some(_) => {
                 // println!("PREVIOUS EFFECT (1): {:?}", effect);
                 user1_status = UserStatus::default();
                 // user1_status.effect = None;
@@ -397,7 +397,7 @@ fn player_turn(
         }
 
         match prev_effect2 {
-            Some(effect) => {
+            Some(_) => {
                 // println!("PREVIOUS EFFECT (2): {:?}", effect);
                 user2_status = UserStatus::default();
                 // user1_status.effect = None;
