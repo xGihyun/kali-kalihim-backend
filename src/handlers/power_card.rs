@@ -17,16 +17,22 @@ pub struct PowerCard {
 }
 
 impl PowerCard {
-    // Three (3) random cards per user, duplicates are allowed
-    fn get_random_cards(amount: usize) -> Vec<String> {
+    fn get() -> Vec<String> {
         let power_cards: Vec<String> = vec![
             "Ancient's Protection".to_string(),
             "Double-edged Sword".to_string(),
             "Extra Wind".to_string(),
             "Twist of Fate".to_string(),
             "Viral x Rival".to_string(),
-            "Warlord's Domain".to_string(),
+            // "Warlord's Domain".to_string(),
         ];
+
+        power_cards
+    }
+
+    // Three (3) random cards per user, duplicates are allowed
+    fn get_random_cards(amount: usize) -> Vec<String> {
+        let power_cards = Self::get();
 
         let mut rng = rand::thread_rng();
         power_cards
@@ -93,9 +99,9 @@ pub async fn insert_card(
         }
         None => {
             let mut txn = pool.begin().await?;
-            let amount = payload.amount.unwrap_or(3);
-            let random_cards = PowerCard::get_random_cards(amount);
-            let mut power_cards: Vec<PowerCard> = Vec::with_capacity(amount);
+            // let amount = payload.amount.unwrap_or(3);
+            let random_cards = PowerCard::get();
+            let mut power_cards: Vec<PowerCard> = Vec::with_capacity(random_cards.len());
 
             for random_card in random_cards.iter() {
                 let card = sqlx::query_as::<_, PowerCard>(

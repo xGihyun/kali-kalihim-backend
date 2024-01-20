@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Row;
 use sqlx::{prelude::FromRow, PgPool};
+use tracing::info;
 
 use crate::error::AppError;
 
@@ -441,6 +442,8 @@ pub async fn delete_users(
 
     let comma_sep_users = users.join(", ");
 
+    info!("{query:?}");
+
     if query.force {
         // Delete battle cards
         sqlx::query(
@@ -464,13 +467,15 @@ pub async fn delete_users(
         .execute(&mut *txn)
         .await?;
 
+        info!("{comma_sep_users}");
+
         // Delete matches
         // NOTE: DANGEREOUS: If users have been swapped via twist of fate, it will delete the copy of
         // the orginal match
         sqlx::query(
             format!(
-                "DELETE FROM match_sets WHERE user1_id IN ({}) OR user2_id IN ({})",
-                comma_sep_users, comma_sep_users
+                "DELETE FROM match_sets WHERE user1_id IN ({}) OR user2_id IN ({}) og_user1_id IN ({}) OR og_user2_id IN ({})",
+                comma_sep_users, comma_sep_users,comma_sep_users,comma_sep_users
             )
             .as_str(),
         )
