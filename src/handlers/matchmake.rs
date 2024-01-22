@@ -191,11 +191,10 @@ pub async fn get_max_sets(
 #[derive(Debug, Deserialize)]
 pub struct Arnis {
     section: String,
-    // skill: String,
+    skill: String,
     footwork: String,
 }
 
-// TODO: Admin will choose skill, footwork is randomized (or vice versa?)
 pub async fn matchmake(
     extract::State(pool): extract::State<PgPool>,
     extract::Json(payload): extract::Json<Arnis>,
@@ -273,23 +272,13 @@ pub async fn matchmake(
             u1.id AS og_user1_id,
             u2.id AS og_user2_id,
             ($1) AS section,
-            rs.random_skill AS arnis_skill,
-            ($2) AS arnis_footwork,
-            rs.random_skill AS og_arnis_skill,
+            ($2) AS arnis_skill,
+            ($3) AS arnis_footwork,
+            ($2) AS og_arnis_skill,
             (SELECT set FROM LatestMatch) + 1 AS set
         FROM
             AdjustedRankedUsers u1
         JOIN AdjustedRankedUsers u2 ON u1.user_rank = (u2.user_rank - 1) % u2.user_rank
-            CROSS JOIN LATERAL (
-                SELECT
-                    CASE 
-                        WHEN random() < 0.2 THEN 'strikes'
-                        WHEN random() < 0.4 THEN 'blocks'
-                        WHEN random() < 0.6 THEN 'forward_sinawali'
-                        WHEN random() < 0.8 THEN 'sideward_sinawali'
-                        ELSE 'reversed_sinawali'
-                    END AS random_skill
-            ) AS rs
         -- Exclude rows where either user is marked for exclusion
         WHERE u1.is_excluded = FALSE AND u2.is_excluded = FALSE
         AND u2.user_rank % 2 = 0
@@ -302,22 +291,12 @@ pub async fn matchmake(
             user1_id AS og_user1_id,
             user2_id AS og_user2_id,
             ($1) AS section,
-            rs.random_skill AS arnis_skill,
-            ($2) AS arnis_footwork,
-            rs.random_skill AS og_arnis_skill,
+            ($2) AS arnis_skill,
+            ($3) AS arnis_footwork,
+            ($2) AS og_arnis_skill,
             (SELECT set FROM LatestMatch) + 1 AS set
         FROM
             PersistedPairs
-        CROSS JOIN LATERAL (
-            SELECT
-                CASE 
-                    WHEN random() < 0.2 THEN 'strikes'
-                    WHEN random() < 0.4 THEN 'blocks'
-                    WHEN random() < 0.6 THEN 'forward_sinawali'
-                    WHEN random() < 0.8 THEN 'sideward_sinawali'
-                    ELSE 'reversed_sinawali'
-                END AS random_skill
-        ) AS rs
         RETURNING *,
             (SELECT u1.first_name FROM users u1 WHERE u1.id = user1_id) AS user1_first_name,
             (SELECT u1.last_name FROM users u1 WHERE u1.id = user1_id) AS user1_last_name,
@@ -326,6 +305,7 @@ pub async fn matchmake(
         "#,
     )
     .bind(&payload.section)
+    .bind(payload.skill)
     .bind(payload.footwork)
     .fetch_all(&mut *txn)
     .await?;
