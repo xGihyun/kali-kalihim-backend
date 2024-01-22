@@ -22,7 +22,7 @@ pub struct User {
     first_name: String,
     last_name: String,
     age: i32,
-    contact_number: i32,
+    contact_number: String,
     sex: i16,
     rank_overall: i32,
     rank_section: i32,
@@ -260,7 +260,7 @@ pub struct UpdateUser {
     first_name: Option<String>,
     last_name: Option<String>,
     age: Option<i32>,
-    contact_number: Option<i32>,
+    contact_number: Option<String>,
     sex: Option<i16>,
     score: Option<i32>,
     role: Option<String>,
@@ -380,7 +380,7 @@ pub struct Register {
     first_name: String,
     last_name: String,
     age: i32,
-    contact_number: i32,
+    contact_number: String,
     sex: i16,
 }
 
