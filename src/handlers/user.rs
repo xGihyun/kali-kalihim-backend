@@ -1,13 +1,13 @@
 use axum::response::Result;
-use axum::{extract, http};
-use chrono::format;
+use axum::{extract, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::Row;
-use sqlx::{prelude::FromRow, PgPool};
-use tracing::info;
+use sqlx::{prelude::FromRow, PgPool, Row};
+use tracing::debug;
 
 use crate::error::AppError;
+
+use super::power_card::PowerCard;
 
 #[derive(Debug, Deserialize)]
 pub struct UserId {
@@ -231,7 +231,7 @@ pub async fn get_user(
     extract::Path(user_id): extract::Path<uuid::Uuid>,
     extract::Query(query): extract::Query<UserQuery>,
 ) -> Result<axum::Json<serde_json::Value>, AppError> {
-    if let Some(filter) = query.filter {
+    if let Some(_) = query.filter {
         let user = sqlx::query_as::<_, UserName>(
             "SELECT first_name, last_name FROM users WHERE id = ($1)",
         )
@@ -270,7 +270,7 @@ pub async fn update_user(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(user_id): extract::Path<uuid::Uuid>,
     extract::Json(payload): extract::Json<UpdateUser>,
-) -> Result<http::StatusCode, AppError> {
+) -> Result<StatusCode, AppError> {
     let mut txn = pool.begin().await?;
 
     sqlx::query(
@@ -322,7 +322,7 @@ pub async fn update_user(
 
     txn.commit().await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,7 +341,7 @@ pub async fn update_column(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<UpdateQuery>,
     extract::Json(payload): extract::Json<UpdateAvatar>,
-) -> Result<http::StatusCode, AppError> {
+) -> Result<StatusCode, AppError> {
     let sql = format!("UPDATE users SET {} = ($1) WHERE id = ($2)", query.column);
 
     sqlx::query(sql.as_str())
@@ -350,7 +350,7 @@ pub async fn update_column(
         .execute(&pool)
         .await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,14 +362,14 @@ pub async fn update_private_status(
     extract::State(pool): extract::State<PgPool>,
     extract::Path(user_id): extract::Path<uuid::Uuid>,
     extract::Json(payload): extract::Json<UpdatePrivateStatus>,
-) -> Result<http::StatusCode, AppError> {
+) -> Result<StatusCode, AppError> {
     sqlx::query("UPDATE users SET is_private = ($1) WHERE id = ($2)")
         .bind(payload.is_private)
         .bind(user_id)
         .execute(&pool)
         .await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,8 +387,10 @@ pub struct Register {
 pub async fn register(
     extract::State(pool): extract::State<PgPool>,
     extract::Json(payload): extract::Json<Register>,
-) -> Result<axum::Json<User>, AppError> {
-    let res = sqlx::query_as::<_, User>(
+) -> Result<(StatusCode, axum::Json<User>), AppError> {
+    let mut txn = pool.begin().await?;
+
+    let user = sqlx::query_as::<_, User>(
         r#"
         INSERT INTO users (id, email, section, first_name, last_name, age, contact_number, sex)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -403,25 +405,31 @@ pub async fn register(
     .bind(&payload.age)
     .bind(&payload.contact_number)
     .bind(&payload.sex)
-    .fetch_one(&pool)
-    .await;
+    .fetch_one(&mut *txn)
+    .await?;
 
-    match res {
-        Ok(user) => Ok(axum::Json(user)),
-        Err(err) => match err {
-            sqlx::Error::Database(db_err) => Err(AppError::new(
-                http::StatusCode::CONFLICT,
-                format!(
-                    "Failed to register. Check if user already exists: {}",
-                    db_err
-                ),
-            )),
-            _ => Err(AppError::new(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to register: {}", err),
-            )),
-        },
+    let power_cards_str = PowerCard::get();
+    let mut power_cards: Vec<PowerCard> = Vec::with_capacity(power_cards_str.len());
+
+    for card_name in power_cards_str.iter() {
+        let card = sqlx::query_as::<_, PowerCard>(
+            r#"
+                    INSERT INTO power_cards (name, user_id) 
+                    VALUES ($1, $2)
+                    RETURNING *
+                    "#,
+        )
+        .bind(card_name)
+        .bind(&payload.id)
+        .fetch_one(&mut *txn)
+        .await?;
+
+        power_cards.push(card);
     }
+
+    txn.commit().await?;
+
+    Ok((StatusCode::CREATED, axum::Json(user)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -433,16 +441,16 @@ pub async fn delete_users(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<DeleteUserQuery>,
     extract::Json(users): extract::Json<Vec<String>>,
-) -> Result<http::StatusCode, AppError> {
+) -> Result<StatusCode, AppError> {
     let mut txn = pool.begin().await?;
     let users: Vec<String> = users
         .into_iter()
-        .map(|user_id| format!("'{}'", user_id))
+        .map(|user_id| format!("'{}'", user_id.trim()))
         .collect();
 
     let comma_sep_users = users.join(", ");
 
-    info!("{query:?}");
+    debug!("{:?}", query);
 
     if query.force {
         // Delete battle cards
@@ -467,21 +475,21 @@ pub async fn delete_users(
         .execute(&mut *txn)
         .await?;
 
-        info!("{comma_sep_users}");
-
         // Delete matches
         // NOTE: DANGEREOUS: If users have been swapped via twist of fate, it will delete the copy of
         // the orginal match
         sqlx::query(
             format!(
-                "DELETE FROM match_sets WHERE user1_id IN ({}) OR user2_id IN ({}) og_user1_id IN ({}) OR og_user2_id IN ({})",
-                comma_sep_users, comma_sep_users,comma_sep_users,comma_sep_users
+                "DELETE FROM match_sets WHERE user1_id IN ({}) OR user2_id IN ({}) OR og_user1_id IN ({}) OR og_user2_id IN ({})",
+                comma_sep_users, comma_sep_users, comma_sep_users, comma_sep_users
             )
             .as_str(),
         )
         .execute(&mut *txn)
         .await?;
     }
+
+    debug!("{}", comma_sep_users);
 
     // Delete power card
     sqlx::query(
@@ -495,30 +503,30 @@ pub async fn delete_users(
     .await?;
 
     // Delete user
-    let res = sqlx::query(format!("DELETE FROM users WHERE id IN ({})", comma_sep_users).as_str())
+    sqlx::query(format!("DELETE FROM users WHERE id IN ({})", comma_sep_users).as_str())
         .execute(&mut *txn)
-        .await;
+        .await?;
 
-    // Could implement a default trait for AppError
-    match res {
-        Ok(_) => txn.commit().await?,
-        Err(err) => match err {
-            sqlx::Error::Database(db_err) => match db_err.kind() {
-                sqlx::error::ErrorKind::ForeignKeyViolation => Err(AppError::new(
-                    http::StatusCode::CONFLICT,
-                    format!("SQLx Error: {}", db_err),
-                )),
-                _ => Err(AppError::new(
-                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("SQLx Error: {}", db_err),
-                )),
-            },
-            _ => Err(AppError::new(
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("SQLx Error: {}", err),
-            )),
-        }?,
-    };
+    // Update rankings
+    sqlx::query(
+        r#"
+        WITH OverallRank AS (
+            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
+            FROM users
+        ), SectionRank AS (
+            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
+            FROM users
+        )
+        UPDATE users u
+        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
+        FROM OverallRank ovr, SectionRank sr
+        WHERE u.id = ovr.id AND u.id = sr.id
+        "#,
+    )
+    .execute(&mut *txn)
+    .await?;
 
-    Ok(http::StatusCode::NO_CONTENT)
+    txn.commit().await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

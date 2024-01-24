@@ -17,7 +17,7 @@ pub struct PowerCard {
 }
 
 impl PowerCard {
-    fn get() -> Vec<String> {
+    pub fn get() -> Vec<String> {
         let power_cards: Vec<String> = vec![
             "Ancient's Protection".to_string(),
             "Double-edged Sword".to_string(),

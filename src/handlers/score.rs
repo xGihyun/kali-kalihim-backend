@@ -70,9 +70,12 @@ pub async fn update_score(
         SET 
             score = 
                 CASE 
-                    WHEN ($4) THEN (score + ($1)) + (($2) * (2 * des.count))
-                    WHEN NOT ($4) AND ap.count > 0 THEN score + ($1)
-                    ELSE (score + ($1)) - (($2) * (2 * des.count))
+                    WHEN ($4) THEN 
+                        (score + ($1)) + (CASE WHEN des.count = 0 THEN ($2) ELSE (($2) * (2 * des.count)) END)
+                    WHEN NOT ($4) AND ap.count > 0 THEN 
+                        score + ($1)
+                    ELSE 
+                        (score + ($1)) - (CASE WHEN des.count = 0 THEN ($2) ELSE (($2) * (2 * des.count)) END)
                 END
         FROM DoubleEdgedSword des, AncientsProtection ap
         WHERE id = ($3);
