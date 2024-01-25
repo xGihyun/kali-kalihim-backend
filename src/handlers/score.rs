@@ -4,6 +4,7 @@ use axum::response::Result;
 use serde::Deserialize;
 use sqlx::prelude::FromRow;
 use sqlx::PgPool;
+use tracing::debug;
 
 use crate::error::AppError;
 
@@ -12,7 +13,8 @@ pub struct UpdateScore {
     user_id: uuid::Uuid,
     score: i32,
     difference: i32,
-    is_winner: bool,
+    is_winner: String, // "win", "lose", or "draw"
+    match_set_id: uuid::Uuid,
 }
 
 pub async fn update_ranks(
@@ -45,6 +47,8 @@ pub async fn update_score(
 ) -> Result<http::StatusCode, AppError> {
     let mut txn = pool.begin().await?;
 
+    debug!("{:?}", payload);
+
     // current score + payload score
     sqlx::query(
         r#"
@@ -70,9 +74,9 @@ pub async fn update_score(
         SET 
             score = 
                 CASE 
-                    WHEN ($4) THEN 
+                    WHEN ($4) = 'win' THEN 
                         (score + ($1)) + (CASE WHEN des.count = 0 THEN ($2) ELSE (($2) * (2 * des.count)) END)
-                    WHEN NOT ($4) AND ap.count > 0 THEN 
+                    WHEN (($4) = 'lose' AND ap.count > 0) OR ($4) = 'draw' THEN 
                         score + ($1)
                     ELSE 
                         (score + ($1)) - (CASE WHEN des.count = 0 THEN ($2) ELSE (($2) * (2 * des.count)) END)
@@ -84,7 +88,22 @@ pub async fn update_score(
     .bind(payload.score)
     .bind(payload.difference)
     .bind(payload.user_id)
-    .bind(payload.is_winner)
+    .bind(payload.is_winner.as_str())
+    .execute(&mut *txn)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE match_sets
+        SET 
+            user1_arnis_verdict = CASE WHEN user1_id = ($1) THEN ($2) ELSE user1_arnis_verdict END,
+            user2_arnis_verdict = CASE WHEN user2_id = ($1) THEN ($2) ELSE user2_arnis_verdict END
+        WHERE id = ($3);
+        "#,
+    )
+    .bind(payload.user_id)
+    .bind(payload.is_winner.as_str())
+    .bind(payload.match_set_id)
     .execute(&mut *txn)
     .await?;
 

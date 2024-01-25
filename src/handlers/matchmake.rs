@@ -1,7 +1,6 @@
 use axum::response::Result;
 use axum::{extract, http};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sqlx::{prelude::FromRow, PgPool};
 
 use crate::error::AppError;
@@ -29,6 +28,10 @@ pub struct Matchmake {
     set: i32,
     user1_total_damage: Option<f32>,
     user2_total_damage: Option<f32>,
+    user1_arnis_verdict: Option<String>,
+    user2_arnis_verdict: Option<String>,
+    user1_score: Option<i32>,
+    user2_score: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,6 +41,7 @@ pub struct UserMatchQuery {
 }
 
 // This can be merged with get_matches()
+// TODO: Use query builder
 pub async fn get_latest_matches(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<UserMatchQuery>,
