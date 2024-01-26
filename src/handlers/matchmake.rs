@@ -7,7 +7,7 @@ use crate::error::AppError;
 
 use super::user::UserId;
 
-// This is horrible
+// NOTE: This is horrible
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct Matchmake {
     id: uuid::Uuid,
@@ -32,6 +32,10 @@ pub struct Matchmake {
     user2_arnis_verdict: Option<String>,
     user1_score: Option<i32>,
     user2_score: Option<i32>,
+    user1_des_count: i16,
+    user2_des_count: i16,
+    user1_ap_count: i16,
+    user2_ap_count: i16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +173,26 @@ pub async fn get_matches(
     .bind(query.set)
     .bind(query.section)
     .fetch_all(&pool)
+    .await?;
+
+    Ok(axum::Json(matches))
+}
+
+pub async fn get_match(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Path(match_set_id): extract::Path<uuid::Uuid>,
+) -> Result<axum::Json<Matchmake>, AppError> {
+    let matches = sqlx::query_as::<_, Matchmake>(
+        r#"
+        SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
+        FROM match_sets ms
+        JOIN users u1 ON user1_id = u1.id
+        JOIN users u2 ON user2_id = u2.id 
+        WHERE ms.id = ($1)
+        "#,
+    )
+    .bind(match_set_id)
+    .fetch_one(&pool)
     .await?;
 
     Ok(axum::Json(matches))

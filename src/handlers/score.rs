@@ -41,6 +41,7 @@ pub async fn update_ranks(
     Ok(http::StatusCode::OK)
 }
 
+// NOTE: This is horrible
 pub async fn update_score(
     extract::State(pool): extract::State<PgPool>,
     extract::Json(payload): extract::Json<UpdateScore>,
@@ -94,16 +95,42 @@ pub async fn update_score(
 
     sqlx::query(
         r#"
+        WITH DoubleEdgedSword AS (
+            SELECT COUNT(*)
+            FROM power_cards
+            WHERE 
+                user_id = ($1) 
+                AND name = 'Double-edged Sword' 
+                AND is_active = TRUE 
+                AND is_used = FALSE
+        ),
+            AncientsProtection AS (
+            SELECT COUNT(*)
+            FROM power_cards
+            WHERE 
+                user_id = ($1) 
+                AND name = 'Ancient''s Protection' 
+                AND is_active = TRUE 
+                AND is_used = FALSE
+        )
         UPDATE match_sets
         SET 
+            user1_score = CASE WHEN user1_id = ($1) THEN ($4) ELSE user1_score END,
+            user2_score = CASE WHEN user2_id = ($1) THEN ($4) ELSE user2_score END,
             user1_arnis_verdict = CASE WHEN user1_id = ($1) THEN ($2) ELSE user1_arnis_verdict END,
-            user2_arnis_verdict = CASE WHEN user2_id = ($1) THEN ($2) ELSE user2_arnis_verdict END
+            user2_arnis_verdict = CASE WHEN user2_id = ($1) THEN ($2) ELSE user2_arnis_verdict END,
+            user1_des_count = CASE WHEN user1_id = ($1) THEN des.count ELSE user1_des_count END,
+            user1_ap_count = CASE WHEN user1_id = ($1) THEN ap.count ELSE user1_ap_count END,
+            user2_des_count = CASE WHEN user2_id = ($1) THEN des.count ELSE user2_des_count END,
+            user2_ap_count = CASE WHEN user2_id = ($1) THEN ap.count ELSE user2_ap_count END
+        FROM DoubleEdgedSword des, AncientsProtection ap
         WHERE id = ($3);
         "#,
     )
     .bind(payload.user_id)
     .bind(payload.is_winner.as_str())
     .bind(payload.match_set_id)
+    .bind(payload.score)
     .execute(&mut *txn)
     .await?;
 

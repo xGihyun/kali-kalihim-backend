@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/matches", get(matchmake::get_matches))
         .route(
             "/matches/:match_set_id",
-            patch(matchmake::update_match_status),
+            get(matchmake::get_match).patch(matchmake::update_match_status),
         )
         // .route("/matches/update", post(matchmake::update_match_status))
         .route("/matches/latest", post(matchmake::get_latest_matches))
