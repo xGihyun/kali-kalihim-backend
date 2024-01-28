@@ -2,6 +2,7 @@ use axum::response::Result;
 use axum::{extract, http};
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
+use sqlx::{Postgres, QueryBuilder};
 
 use crate::error::AppError;
 
@@ -51,20 +52,24 @@ pub async fn get_latest_matches(
     extract::Query(query): extract::Query<UserMatchQuery>,
     extract::Json(payload): extract::Json<UserId>,
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
-    let mut sql = r#"
+    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
+        r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
         FROM match_sets ms
-        JOIN users u1 ON user1_id = u1.id
-        JOIN users u2 ON user2_id = u2.id 
+        JOIN users u1 ON og_user1_id = u1.id
+        JOIN users u2 ON og_user2_id = u2.id 
         WHERE user1_id = ($1) OR user2_id = ($1)
         ORDER BY created_at DESC
-        "#.to_string();
+    "#,
+    );
 
     if let Some(limit) = query.limit {
-        sql.push_str(format!(" LIMIT {} ", limit).as_str());
+        q_builder.push(format_args!(" LIMIT {}", limit));
     }
 
-    let latest_match = sqlx::query_as::<_, Matchmake>(sql.as_str())
+    let sql = q_builder.sql();
+
+    let latest_match = sqlx::query_as::<_, Matchmake>(sql)
         .bind(payload.user_id)
         .fetch_all(&pool)
         .await?;
@@ -78,20 +83,24 @@ pub async fn get_original_matches(
     extract::Query(query): extract::Query<UserMatchQuery>,
     extract::Json(payload): extract::Json<UserId>,
 ) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
-    let mut sql = r#"
+    let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
+        r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
         FROM match_sets ms
         JOIN users u1 ON og_user1_id = u1.id
         JOIN users u2 ON og_user2_id = u2.id 
         WHERE og_user1_id = ($1) OR og_user2_id = ($1)
         ORDER BY created_at DESC
-        "#.to_string();
+    "#,
+    );
 
     if let Some(limit) = query.limit {
-        sql.push_str(format!(" LIMIT {} ", limit).as_str());
+        q_builder.push(format_args!(" LIMIT {}", limit));
     }
 
-    let latest_match = sqlx::query_as::<_, Matchmake>(sql.as_str())
+    let sql = q_builder.sql();
+
+    let latest_match = sqlx::query_as::<_, Matchmake>(sql)
         .bind(payload.user_id)
         .fetch_all(&pool)
         .await?;

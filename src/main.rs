@@ -5,13 +5,12 @@
 use anyhow::Context;
 use axum::{
     http,
-    response::Response,
     routing::{get, patch, post},
     Router,
 };
 use dotenv::dotenv;
 use std::env;
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
