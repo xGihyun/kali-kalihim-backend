@@ -2,6 +2,7 @@ use axum::response::Result;
 use axum::{extract, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::Execute;
 use sqlx::{prelude::FromRow, PgPool, Row};
 use tracing::debug;
 
@@ -67,49 +68,58 @@ pub async fn get_users(
     extract::Query(query): extract::Query<UsersQuery>,
 ) -> Result<axum::Json<Value>, AppError> {
     let mut query_builder: sqlx::QueryBuilder<'_, sqlx::Postgres> =
-        sqlx::QueryBuilder::new(" SELECT ");
+        sqlx::QueryBuilder::new("SELECT ");
 
     if let Some(fields) = query.fields.as_ref() {
         query_builder.push(fields);
     } else {
-        query_builder.push(" * ");
+        query_builder.push("*");
     }
 
-    query_builder.push(" FROM users ");
+    query_builder.push(" FROM users");
 
     if let Some(section) = query.section {
         let sections: Vec<&str> = section.split(',').collect();
 
         if sections.len() == 1 {
-            query_builder.push(format!(" WHERE section = '{}' ", section));
+            query_builder.push(format_args!(" WHERE section = '{}'", section));
         } else {
-            let sections: Vec<String> = section
-                .split(',')
-                .map(|s| format!("'{}'", s.trim()))
-                .collect();
-            let section_list = sections.join(", ");
-            query_builder.push(format!(" WHERE section IN ({}) ", section_list));
+            let mut comma_sep = query_builder.separated(", ");
+
+            comma_sep.push_unseparated(" WHERE section IN (");
+
+            for section in sections {
+                comma_sep.push(section);
+            }
+
+            comma_sep.push_unseparated(")");
         }
+
+        // query_builder.push(" AND role = 'user'");
+    } else {
+        // query_builder.push(" WHERE role = 'user'");
     }
 
     if let Some(order_by) = query.order_by {
-        query_builder.push(format!(
-            " ORDER BY {} {} ",
+        query_builder.push(format_args!(
+            " ORDER BY {} {}",
             order_by,
             query.order.unwrap_or("asc".to_string())
         ));
     }
 
     if let Some(limit) = query.limit {
-        query_builder.push(format!(" LIMIT {} ", limit,));
+        query_builder.push(format_args!(" LIMIT {}", limit,));
     }
 
     if let Some(skip) = query.skip {
-        query_builder.push(format!(" OFFSET {} ", skip,));
+        query_builder.push(format_args!(" OFFSET {}", skip,));
     }
 
+    let sql = query_builder.build().sql();
+
     if let Some(fields) = query.fields.as_ref() {
-        let pg_rows = sqlx::query(query_builder.sql()).fetch_all(&pool).await?;
+        let pg_rows = sqlx::query(sql).fetch_all(&pool).await?;
         let fields: Vec<&str> = fields.split(',').collect();
 
         let mut json_vec: Vec<Value> = Vec::new();
@@ -144,9 +154,7 @@ pub async fn get_users(
 
         Ok(axum::Json(values))
     } else {
-        let users = sqlx::query_as::<_, User>(query_builder.sql())
-            .fetch_all(&pool)
-            .await?;
+        let users = sqlx::query_as::<_, User>(sql).fetch_all(&pool).await?;
 
         let values = serde_json::to_value(users)?;
 
@@ -231,7 +239,7 @@ pub async fn get_user(
     extract::Path(user_id): extract::Path<uuid::Uuid>,
     extract::Query(query): extract::Query<UserQuery>,
 ) -> Result<axum::Json<serde_json::Value>, AppError> {
-    if let Some(_) = query.filter {
+    if query.filter.is_some() {
         let user = sqlx::query_as::<_, UserName>(
             "SELECT first_name, last_name FROM users WHERE id = ($1)",
         )
@@ -397,14 +405,14 @@ pub async fn register(
         RETURNING *
         "#,
     )
-    .bind(&payload.id)
-    .bind(&payload.email)
-    .bind(&payload.section)
-    .bind(&payload.first_name)
-    .bind(&payload.last_name)
-    .bind(&payload.age)
-    .bind(&payload.contact_number)
-    .bind(&payload.sex)
+    .bind(payload.id)
+    .bind(payload.email)
+    .bind(payload.section)
+    .bind(payload.first_name)
+    .bind(payload.last_name)
+    .bind(payload.age)
+    .bind(payload.contact_number)
+    .bind(payload.sex)
     .fetch_one(&mut *txn)
     .await?;
 
@@ -420,7 +428,7 @@ pub async fn register(
                     "#,
         )
         .bind(card_name)
-        .bind(&payload.id)
+        .bind(payload.id)
         .fetch_one(&mut *txn)
         .await?;
 
@@ -448,6 +456,7 @@ pub async fn delete_users(
         .map(|user_id| format!("'{}'", user_id.trim()))
         .collect();
 
+    // NOTE: Should've used SQLx's QueryBuilder
     let comma_sep_users = users.join(", ");
 
     debug!("{:?}", query);

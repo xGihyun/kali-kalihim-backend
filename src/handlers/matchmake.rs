@@ -72,6 +72,33 @@ pub async fn get_latest_matches(
     Ok(axum::Json(latest_match))
 }
 
+// TODO: Merge with get_latest_matches()
+pub async fn get_original_matches(
+    extract::State(pool): extract::State<PgPool>,
+    extract::Query(query): extract::Query<UserMatchQuery>,
+    extract::Json(payload): extract::Json<UserId>,
+) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    let mut sql = r#"
+        SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
+        FROM match_sets ms
+        JOIN users u1 ON og_user1_id = u1.id
+        JOIN users u2 ON og_user2_id = u2.id 
+        WHERE og_user1_id = ($1) OR og_user2_id = ($1)
+        ORDER BY created_at DESC
+        "#.to_string();
+
+    if let Some(limit) = query.limit {
+        sql.push_str(format!(" LIMIT {} ", limit).as_str());
+    }
+
+    let latest_match = sqlx::query_as::<_, Matchmake>(sql.as_str())
+        .bind(payload.user_id)
+        .fetch_all(&pool)
+        .await?;
+
+    Ok(axum::Json(latest_match))
+}
+
 #[derive(Debug, Serialize, FromRow)]
 pub struct MatchDate {
     created_at: chrono::DateTime<chrono::Utc>,
@@ -154,6 +181,7 @@ pub async fn update_match_status(
 pub struct MatchQuery {
     pub set: i32,
     pub section: String,
+    pub original: Option<bool>,
 }
 
 // This can be merged with get_latest_match()
@@ -165,13 +193,14 @@ pub async fn get_matches(
         r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
         FROM match_sets ms
-        JOIN users u1 ON user1_id = u1.id
-        JOIN users u2 ON user2_id = u2.id 
+        JOIN users u1 ON CASE WHEN ($3) THEN og_user1_id ELSE user1_id END = u1.id
+        JOIN users u2 ON CASE WHEN ($3) THEN og_user2_id ELSE user2_id END = u2.id 
         WHERE ms.set = ($1) AND ms.section = ($2)
         "#,
     )
     .bind(query.set)
     .bind(query.section)
+    .bind(query.original.unwrap_or(false))
     .fetch_all(&pool)
     .await?;
 
