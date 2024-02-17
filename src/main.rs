@@ -27,7 +27,9 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let db_url = env::var("DATABASE_URL").context("DATABASE_URL env not found.")?;
+    let db_url = env::var("DATABASE_URL").unwrap_or(String::from(
+        "postgresql://postgres:postgres@localhost:54322/postgres",
+    ));
     let ip_addr = env::var("IP_ADDRESS").unwrap_or("127.0.0.1".to_string());
     let max_connections = env::var("MAX_CONNECTIONS")
         .unwrap_or("10".to_string())

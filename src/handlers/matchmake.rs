@@ -23,7 +23,6 @@ pub struct Matchmake {
     user2_last_name: String,
     section: String,
     arnis_skill: String,
-    arnis_footwork: String,
     card_deadline: chrono::DateTime<chrono::Utc>,
     status: String,
     set: i32,
@@ -258,7 +257,6 @@ pub async fn get_max_sets(
 pub struct Arnis {
     section: String,
     skill: String,
-    footwork: String,
 }
 
 pub async fn matchmake(
@@ -328,7 +326,6 @@ pub async fn matchmake(
             og_user2_id,
             section, 
             arnis_skill, 
-            arnis_footwork, 
             og_arnis_skill, 
             set
         )
@@ -339,7 +336,6 @@ pub async fn matchmake(
             u2.id AS og_user2_id,
             ($1) AS section,
             ($2) AS arnis_skill,
-            ($3) AS arnis_footwork,
             ($2) AS og_arnis_skill,
             (SELECT set FROM LatestMatch) + 1 AS set
         FROM
@@ -358,7 +354,6 @@ pub async fn matchmake(
             user2_id AS og_user2_id,
             ($1) AS section,
             ($2) AS arnis_skill,
-            ($3) AS arnis_footwork,
             ($2) AS og_arnis_skill,
             (SELECT set FROM LatestMatch) + 1 AS set
         FROM
@@ -372,7 +367,6 @@ pub async fn matchmake(
     )
     .bind(&payload.section)
     .bind(payload.skill)
-    .bind(payload.footwork)
     .fetch_all(&mut *txn)
     .await?;
 

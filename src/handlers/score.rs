@@ -4,9 +4,12 @@ use axum::response::Result;
 use serde::Deserialize;
 use sqlx::prelude::FromRow;
 use sqlx::PgPool;
+use sqlx::Postgres;
 use tracing::debug;
 
 use crate::error::AppError;
+use crate::handlers::badge::Badge;
+use crate::handlers::badge::SkillBadge;
 
 #[derive(Debug, Deserialize, FromRow)]
 pub struct UpdateScore {
@@ -92,6 +95,30 @@ pub async fn update_score(
     .bind(payload.is_winner.as_str())
     .execute(&mut *txn)
     .await?;
+
+    // TODO: Change badge to skill badge
+    if payload.score >= 40 {
+        let skill =
+            sqlx::query_scalar::<_, String>("SELECT arnis_skill FROM match_sets WHERE id = ($1)")
+                .bind(payload.match_set_id)
+                .fetch_one(&mut *txn)
+                .await?;
+
+        let skill_badge = SkillBadge::new(skill.as_str());
+        let badge_info = Badge::info(Badge::BestInSkill(skill_badge))?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO badges (name, description, user_id)
+            VALUES ($1, $2, $3)
+            "#,
+        )
+        .bind(badge_info.name)
+        .bind(badge_info.description)
+        .bind(payload.user_id)
+        .execute(&mut *txn)
+        .await?;
+    }
 
     sqlx::query(
         r#"
