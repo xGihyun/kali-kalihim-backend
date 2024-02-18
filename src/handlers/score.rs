@@ -4,12 +4,12 @@ use axum::response::Result;
 use serde::Deserialize;
 use sqlx::prelude::FromRow;
 use sqlx::PgPool;
-use sqlx::Postgres;
 use tracing::debug;
 
 use crate::error::AppError;
 use crate::handlers::badge::Badge;
 use crate::handlers::badge::SkillBadge;
+use crate::handlers::update_ranks;
 
 #[derive(Debug, Deserialize, FromRow)]
 pub struct UpdateScore {
@@ -18,30 +18,6 @@ pub struct UpdateScore {
     difference: i32,
     is_winner: String, // "win", "lose", or "draw"
     match_set_id: uuid::Uuid,
-}
-
-pub async fn update_ranks(
-    extract::State(pool): extract::State<PgPool>,
-) -> Result<http::StatusCode, AppError> {
-    sqlx::query(
-        r#"
-        WITH OverallRank AS (
-            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
-            FROM users
-        ), SectionRank AS (
-            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
-            FROM users
-        )
-        UPDATE users u
-        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
-        FROM OverallRank ovr, SectionRank sr
-        WHERE u.id = ovr.id AND u.id = sr.id
-        "#,
-    )
-    .execute(&pool)
-    .await?;
-
-    Ok(http::StatusCode::OK)
 }
 
 // NOTE: This is horrible
@@ -96,7 +72,6 @@ pub async fn update_score(
     .execute(&mut *txn)
     .await?;
 
-    // TODO: Change badge to skill badge
     if payload.score >= 40 {
         let skill =
             sqlx::query_scalar::<_, String>("SELECT arnis_skill FROM match_sets WHERE id = ($1)")
@@ -161,23 +136,7 @@ pub async fn update_score(
     .execute(&mut *txn)
     .await?;
 
-    sqlx::query(
-        r#"
-        WITH OverallRank AS (
-            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
-            FROM users
-        ), SectionRank AS (
-            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
-            FROM users
-        )
-        UPDATE users u
-        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
-        FROM OverallRank ovr, SectionRank sr
-        WHERE u.id = ovr.id AND u.id = sr.id
-        "#,
-    )
-    .execute(&mut *txn)
-    .await?;
+    update_ranks(&mut *txn).await?;
 
     txn.commit().await?;
 

@@ -18,7 +18,7 @@ use tracing_subscriber::EnvFilter;
 mod error;
 mod handlers;
 
-use handlers::{card_battle, matchmake, power_card, score, section, user};
+use handlers::{card_battle, matchmake, power_card, rubric, score, section, user};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
@@ -65,6 +65,10 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route(
             "/matches/:match_set_id",
             get(matchmake::get_match).patch(matchmake::update_match_status),
+        )
+        .route(
+            "/matches/:match_set_id/comment",
+            patch(matchmake::insert_comment),
         )
         // .route("/matches/update", post(matchmake::update_match_status))
         .route("/matches/latest", post(matchmake::get_latest_matches))
@@ -114,6 +118,13 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route(
             "/card_battle/:match_set_id",
             get(card_battle::get_match_results),
+        )
+        // Rubrics
+        .route(
+            "/rubrics",
+            get(rubric::get_rubrics)
+                .post(rubric::create_rubric)
+                .delete(rubric::delete_rubrics),
         )
         .layer(CorsLayer::permissive())
         .with_state(pool);

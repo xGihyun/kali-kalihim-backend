@@ -1,8 +1,13 @@
+use axum::http::StatusCode;
 use axum::response::Result;
-use axum::{extract, http};
+use axum::{
+    extract::{Json, Path, Query, State},
+    http,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
 use sqlx::{Postgres, QueryBuilder};
+use tracing::info;
 
 use crate::error::AppError;
 
@@ -47,10 +52,10 @@ pub struct UserMatchQuery {
 // This can be merged with get_matches()
 // TODO: Use query builder
 pub async fn get_latest_matches(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Query(query): extract::Query<UserMatchQuery>,
-    extract::Json(payload): extract::Json<UserId>,
-) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    State(pool): State<PgPool>,
+    Query(query): Query<UserMatchQuery>,
+    Json(payload): Json<UserId>,
+) -> Result<Json<Vec<Matchmake>>, AppError> {
     let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
         r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
@@ -73,15 +78,15 @@ pub async fn get_latest_matches(
         .fetch_all(&pool)
         .await?;
 
-    Ok(axum::Json(latest_match))
+    Ok(Json(latest_match))
 }
 
 // TODO: Merge with get_latest_matches()
 pub async fn get_original_matches(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Query(query): extract::Query<UserMatchQuery>,
-    extract::Json(payload): extract::Json<UserId>,
-) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    State(pool): State<PgPool>,
+    Query(query): Query<UserMatchQuery>,
+    Json(payload): Json<UserId>,
+) -> Result<Json<Vec<Matchmake>>, AppError> {
     let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
         r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
@@ -104,7 +109,34 @@ pub async fn get_original_matches(
         .fetch_all(&pool)
         .await?;
 
-    Ok(axum::Json(latest_match))
+    Ok(Json(latest_match))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Comment {
+    comment: String,
+}
+
+pub async fn insert_comment(
+    State(pool): State<PgPool>,
+    Path(match_set_id): Path<uuid::Uuid>,
+    Json(payload): Json<Comment>,
+) -> Result<StatusCode, AppError> {
+    info!("Inserting comment...");
+
+    sqlx::query(
+        r#"
+        UPDATE match_sets 
+        SET comment = ($2)
+        WHERE id = ($1)
+        "#,
+    )
+    .bind(match_set_id)
+    .bind(payload.comment)
+    .execute(&pool)
+    .await?;
+
+    Ok(StatusCode::OK)
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -114,9 +146,9 @@ pub struct MatchDate {
 }
 
 pub async fn get_latest_match_date(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Json(payload): extract::Json<UserId>,
-) -> Result<axum::Json<Option<MatchDate>>, AppError> {
+    State(pool): State<PgPool>,
+    Json(payload): Json<UserId>,
+) -> Result<Json<Option<MatchDate>>, AppError> {
     let latest_match = sqlx::query_as::<_, MatchDate>(
         r#"
         SELECT created_at, card_deadline
@@ -130,7 +162,7 @@ pub async fn get_latest_match_date(
     .fetch_optional(&pool)
     .await?;
 
-    Ok(axum::Json(latest_match))
+    Ok(Json(latest_match))
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -143,9 +175,9 @@ pub struct LatestOpponentData {
 }
 
 pub async fn get_latest_opponent(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Path(user_id): extract::Path<uuid::Uuid>,
-) -> Result<axum::Json<Option<LatestOpponentData>>, AppError> {
+    State(pool): State<PgPool>,
+    Path(user_id): Path<uuid::Uuid>,
+) -> Result<Json<Option<LatestOpponentData>>, AppError> {
     let res = sqlx::query_as::<_, LatestOpponentData>(
         r#"
         WITH LatestMatch AS (
@@ -163,7 +195,7 @@ pub async fn get_latest_opponent(
         "#
     ).bind(user_id).fetch_optional(&pool).await?;
 
-    Ok(axum::Json(res))
+    Ok(Json(res))
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,9 +204,9 @@ pub struct UpdateMatchStatus {
 }
 
 pub async fn update_match_status(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Path(match_set_id): extract::Path<uuid::Uuid>,
-    extract::Json(payload): extract::Json<UpdateMatchStatus>,
+    State(pool): State<PgPool>,
+    Path(match_set_id): Path<uuid::Uuid>,
+    Json(payload): Json<UpdateMatchStatus>,
 ) -> Result<http::StatusCode, AppError> {
     sqlx::query("UPDATE match_sets SET status = ($1) WHERE id = ($2)")
         .bind(payload.status)
@@ -194,9 +226,9 @@ pub struct MatchQuery {
 
 // This can be merged with get_latest_match()
 pub async fn get_matches(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Query(query): extract::Query<MatchQuery>,
-) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    State(pool): State<PgPool>,
+    Query(query): Query<MatchQuery>,
+) -> Result<Json<Vec<Matchmake>>, AppError> {
     let matches = sqlx::query_as::<_, Matchmake>(
         r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
@@ -212,13 +244,13 @@ pub async fn get_matches(
     .fetch_all(&pool)
     .await?;
 
-    Ok(axum::Json(matches))
+    Ok(Json(matches))
 }
 
 pub async fn get_match(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Path(match_set_id): extract::Path<uuid::Uuid>,
-) -> Result<axum::Json<Matchmake>, AppError> {
+    State(pool): State<PgPool>,
+    Path(match_set_id): Path<uuid::Uuid>,
+) -> Result<Json<Matchmake>, AppError> {
     let matches = sqlx::query_as::<_, Matchmake>(
         r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
@@ -232,7 +264,7 @@ pub async fn get_match(
     .fetch_one(&pool)
     .await?;
 
-    Ok(axum::Json(matches))
+    Ok(Json(matches))
 }
 
 #[derive(Debug, Deserialize, Serialize, FromRow)]
@@ -241,16 +273,14 @@ pub struct MaxSet {
     max_set: i32,
 }
 
-pub async fn get_max_sets(
-    extract::State(pool): extract::State<PgPool>,
-) -> Result<axum::Json<Vec<MaxSet>>, AppError> {
+pub async fn get_max_sets(State(pool): State<PgPool>) -> Result<Json<Vec<MaxSet>>, AppError> {
     let max_sets = sqlx::query_as::<_, MaxSet>(
         "SELECT MAX(set) as max_set, ms.section FROM match_sets ms GROUP BY section",
     )
     .fetch_all(&pool)
     .await?;
 
-    Ok(axum::Json(max_sets))
+    Ok(Json(max_sets))
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,9 +290,9 @@ pub struct Arnis {
 }
 
 pub async fn matchmake(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Json(payload): extract::Json<Arnis>,
-) -> Result<axum::Json<Vec<Matchmake>>, AppError> {
+    State(pool): State<PgPool>,
+    Json(payload): Json<Arnis>,
+) -> Result<Json<Vec<Matchmake>>, AppError> {
     let mut txn = pool.begin().await?;
 
     let match_pairs = sqlx::query_as::<_, Matchmake>(
@@ -386,5 +416,5 @@ pub async fn matchmake(
 
     txn.commit().await?;
 
-    Ok(axum::Json(match_pairs))
+    Ok(Json(match_pairs))
 }

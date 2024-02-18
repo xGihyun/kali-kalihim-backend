@@ -4,9 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::Execute;
 use sqlx::{prelude::FromRow, PgPool, Row};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::error::AppError;
+use crate::handlers::update_ranks;
 
 use super::power_card::PowerCard;
 
@@ -297,36 +298,23 @@ pub async fn update_user(
         WHERE id = ($10);
         "#,
     )
-    .bind(payload.email)
-    .bind(payload.section)
-    .bind(payload.first_name)
-    .bind(payload.last_name)
+    .bind(payload.email.as_ref())
+    .bind(payload.section.as_ref())
+    .bind(payload.first_name.as_ref())
+    .bind(payload.last_name.as_ref())
     .bind(payload.age)
     .bind(payload.sex)
-    .bind(payload.contact_number)
+    .bind(payload.contact_number.as_ref())
     .bind(payload.score)
-    .bind(payload.role)
+    .bind(payload.role.as_ref())
     .bind(user_id)
     .execute(&mut *txn)
     .await?;
 
-    sqlx::query(
-        r#"
-        WITH OverallRank AS (
-            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
-            FROM users
-        ), SectionRank AS (
-            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
-            FROM users
-        )
-        UPDATE users u
-        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
-        FROM OverallRank ovr, SectionRank sr
-        WHERE u.id = ovr.id AND u.id = sr.id
-        "#,
-    )
-    .execute(&mut *txn)
-    .await?;
+    update_ranks(&mut *txn).await?;
+
+    info!("Updating user: {:?}", user_id);
+    debug!("{:?}", payload);
 
     txn.commit().await?;
 
@@ -516,24 +504,7 @@ pub async fn delete_users(
         .execute(&mut *txn)
         .await?;
 
-    // Update rankings
-    sqlx::query(
-        r#"
-        WITH OverallRank AS (
-            SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
-            FROM users
-        ), SectionRank AS (
-            SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
-            FROM users
-        )
-        UPDATE users u
-        SET rank_overall = ovr.new_rank, rank_section = sr.new_rank
-        FROM OverallRank ovr, SectionRank sr
-        WHERE u.id = ovr.id AND u.id = sr.id
-        "#,
-    )
-    .execute(&mut *txn)
-    .await?;
+    update_ranks(&mut *txn).await?;
 
     txn.commit().await?;
 
