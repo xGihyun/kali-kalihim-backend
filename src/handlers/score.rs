@@ -7,7 +7,7 @@ use sqlx::PgPool;
 use tracing::debug;
 
 use crate::error::AppError;
-use crate::handlers::badge::Badge;
+use crate::handlers::badge::BadgeType;
 use crate::handlers::badge::SkillBadge;
 use crate::handlers::update_ranks;
 
@@ -80,7 +80,7 @@ pub async fn update_score(
                 .await?;
 
         let skill_badge = SkillBadge::new(skill.as_str());
-        let badge_info = Badge::info(Badge::BestInSkill(skill_badge))?;
+        let badge_info = BadgeType::info(BadgeType::BestInSkill(skill_badge))?;
 
         sqlx::query(
             r#"

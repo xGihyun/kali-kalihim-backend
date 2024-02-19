@@ -16,9 +16,11 @@ pub async fn update_ranks<'c>(executor: impl PgExecutor<'c>) -> Result<(), AppEr
         WITH OverallRank AS (
             SELECT id, DENSE_RANK() OVER (ORDER BY score DESC) AS new_rank
             FROM users
+            WHERE role = 'user'
         ), SectionRank AS (
             SELECT id, DENSE_RANK() OVER (PARTITION BY section ORDER BY score DESC) AS new_rank
             FROM users
+            WHERE role = 'user'
         )
         UPDATE users u
         SET rank_overall = ovr.new_rank, rank_section = sr.new_rank

@@ -1,5 +1,6 @@
-use axum::http::StatusCode;
+use axum::{extract::{State, Path}, http::StatusCode, response::Result, Json};
 use serde::{Deserialize, Serialize};
+use sqlx::{prelude::FromRow, PgPool};
 
 use crate::error::AppError;
 
@@ -15,15 +16,15 @@ pub struct CreateBadge {
     user_id: uuid::Uuid,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct BadgeDb {
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct Badge {
     id: uuid::Uuid,
     name: String,
     description: String,
     user_id: uuid::Uuid,
 }
 
-pub enum Badge {
+pub enum BadgeType {
     TopPlayer,
     BestInSkill(SkillBadge),
     // BestInFootwork(FootworkBadge),
@@ -44,14 +45,14 @@ pub enum FootworkBadge {
     StarReach,
 }
 
-impl Badge {
-    pub fn info(badge: Badge) -> Result<BadgeInfo, AppError> {
+impl BadgeType {
+    pub fn info(badge: BadgeType) -> Result<BadgeInfo, AppError> {
         match badge {
-            Badge::TopPlayer => Ok(BadgeInfo { 
+            BadgeType::TopPlayer => Ok(BadgeInfo { 
                 name: String::from("Top 5"), 
                 description: String::from("Five shining stars mark your brilliance. This badge celebrates your place among the top 5 performers.") 
             }),
-            Badge::BestInSkill(skill_badge) => {
+            BadgeType::BestInSkill(skill_badge) => {
                 match skill_badge {
                     SkillBadge::Blocks(info) | SkillBadge::Strikes(info) | SkillBadge::ForwardSinawali(info) | SkillBadge::SinawaliVariation(info) => {
                         Ok(info)
@@ -85,4 +86,27 @@ impl SkillBadge {
             _ => Self::Unknown,
         }
     }
+}
+
+pub async fn get_badges(
+    State(pool): State<PgPool>,
+    Path(user_id): Path<uuid::Uuid>
+) -> Result<Json<Vec<Badge>>, AppError> {
+    let badges = sqlx::query_as::<_, Badge>(
+        "SELECT * FROM badges WHERE user_id = ($1)"
+    )
+    .bind(user_id)
+    .fetch_all(&pool)
+    .await?;
+
+    Ok(Json(badges))
+}
+
+pub async fn create_badge(
+    State(pool): State<PgPool>,
+) -> Result<StatusCode, AppError> {
+
+    todo!();
+
+    Ok(StatusCode::CREATED)
 }

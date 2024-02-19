@@ -18,7 +18,7 @@ use tracing_subscriber::EnvFilter;
 mod error;
 mod handlers;
 
-use handlers::{card_battle, matchmake, power_card, rubric, score, section, user};
+use handlers::{badge, card_battle, matchmake, power_card, rubric, score, section, user};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             "/users/:user_id",
             get(user::get_user).patch(user::update_user),
         )
+        .route("/users/:user_id/badges", get(badge::get_badges))
         .route(
             "/users/:user_id/private",
             patch(user::update_private_status),
