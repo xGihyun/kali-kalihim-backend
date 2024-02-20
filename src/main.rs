@@ -51,7 +51,10 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             "/users/:user_id",
             get(user::get_user).patch(user::update_user),
         )
-        .route("/users/:user_id/badges", get(badge::get_badges))
+        .route(
+            "/users/:user_id/badges",
+            get(badge::get_badges).post(badge::toggle_badge),
+        )
         .route(
             "/users/:user_id/private",
             patch(user::update_private_status),
