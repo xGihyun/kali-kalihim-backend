@@ -167,7 +167,12 @@ pub async fn toggle_badge(
         sqlx::query(
             r#"
             INSERT INTO badges (name, description, user_id)
-            VALUES ($1, $2, $3)
+            SELECT ($1), ($2), ($3)
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM badges
+                WHERE name = ($1) AND user_id = ($3)
+            );
             "#
         )
         .bind(badge_info.name)

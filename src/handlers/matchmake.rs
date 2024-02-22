@@ -41,6 +41,7 @@ pub struct Matchmake {
     user2_des_count: i16,
     user1_ap_count: i16,
     user2_ap_count: i16,
+    comment: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

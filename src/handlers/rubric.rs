@@ -1,7 +1,7 @@
 use axum::{extract::State, http::StatusCode, response::Result, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, Execute, PgPool};
-use tracing::{debug, field::debug, info};
+use tracing::{debug, info};
 
 use crate::error::AppError;
 
