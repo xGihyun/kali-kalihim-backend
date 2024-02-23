@@ -223,6 +223,9 @@ pub struct MatchQuery {
     pub set: i32,
     pub section: String,
     pub original: Option<bool>,
+    pub latest: Option<bool>,
+    pub user_id: Option<uuid::Uuid>,
+    pub limit: Option<i32>,
 }
 
 // This can be merged with get_latest_match()
@@ -230,6 +233,24 @@ pub async fn get_matches(
     State(pool): State<PgPool>,
     Query(query): Query<MatchQuery>,
 ) -> Result<Json<Vec<Matchmake>>, AppError> {
+    // let mut q_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
+    //     r#"
+    //     SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
+    //     FROM match_sets ms
+    //     JOIN users u1 ON CASE WHEN ($3) THEN og_user1_id ELSE user1_id END = u1.id
+    //     JOIN users u2 ON CASE WHEN ($3) THEN og_user2_id ELSE user2_id END = u2.id
+    //     WHERE ms.set = ($1) AND ms.section = ($2)
+    //     "#,
+    // );
+    //
+    // if let Some(latest) = query.latest {
+    //     q_builder.push("ORDER BY created_at DESC");
+    // }
+    //
+    // if let Some(limit) = query.limit {
+    //     q_builder.push(format_args!(" LIMIT {}", limit));
+    // }
+
     let matches = sqlx::query_as::<_, Matchmake>(
         r#"
         SELECT ms.*, u1.first_name AS user1_first_name, u1.last_name AS user1_last_name, u2.first_name AS user2_first_name, u2.last_name AS user2_last_name
@@ -415,7 +436,7 @@ pub async fn matchmake(
     .execute(&mut *txn)
     .await?;
 
-    txn.commit().await?;
+    // txn.commit().await?;
 
     Ok(Json(match_pairs))
 }

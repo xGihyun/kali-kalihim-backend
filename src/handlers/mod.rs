@@ -4,6 +4,7 @@ use crate::error::AppError;
 
 pub mod badge;
 pub mod card_battle;
+pub mod matches;
 pub mod matchmake;
 pub mod power_card;
 pub mod rubric;

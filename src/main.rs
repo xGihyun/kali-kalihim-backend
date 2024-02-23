@@ -18,7 +18,7 @@ use tracing_subscriber::EnvFilter;
 mod error;
 mod handlers;
 
-use handlers::{badge, card_battle, matchmake, power_card, rubric, score, section, user};
+use handlers::{badge, card_battle, matches, matchmake, power_card, rubric, score, section, user};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<(), anyhow::Error> {
