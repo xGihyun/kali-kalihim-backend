@@ -1,10 +1,16 @@
 use crate::error::AppError;
 use axum::response::Result;
-use axum::{extract, http};
+use axum::Json;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+};
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
+use tracing::info;
 
+use super::matches::MatchPlayer;
 use super::user::UserId;
 
 #[derive(Debug, Deserialize, Serialize, FromRow)]
@@ -51,8 +57,8 @@ pub struct GetPowerCard {
 }
 
 pub async fn get_cards(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Query(query): extract::Query<UserId>,
+    State(pool): State<PgPool>,
+    Query(query): Query<UserId>,
 ) -> Result<axum::Json<Vec<GetPowerCard>>, AppError> {
     let power_cards = sqlx::query_as(
         "SELECT id, name, is_used, is_active FROM power_cards WHERE user_id = ($1) ORDER BY name",
@@ -78,8 +84,8 @@ pub struct InsertCard {
 // Extra Wind function already here
 // Could be better
 pub async fn insert_card(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Json(payload): extract::Json<InsertCard>,
+    State(pool): State<PgPool>,
+    Json(payload): Json<InsertCard>,
 ) -> Result<axum::Json<Vec<PowerCard>>, AppError> {
     match payload.name {
         Some(name) => {
@@ -134,10 +140,10 @@ pub struct UpdateCard {
 }
 
 pub async fn update_card(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Path(card_id): extract::Path<uuid::Uuid>,
-    extract::Json(payload): extract::Json<UpdateCard>,
-) -> Result<http::StatusCode, AppError> {
+    State(pool): State<PgPool>,
+    Path(card_id): Path<uuid::Uuid>,
+    Json(payload): Json<UpdateCard>,
+) -> Result<StatusCode, AppError> {
     sqlx::query("UPDATE power_cards SET is_active = ($1), is_used = ($2) WHERE id = ($3) AND user_id = ($4)")
         .bind(payload.is_activated)
         .bind(payload.is_used)
@@ -146,12 +152,10 @@ pub async fn update_card(
         .execute(&pool)
         .await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
 }
 
-pub async fn update_cards(
-    extract::State(pool): extract::State<PgPool>,
-) -> Result<http::StatusCode, AppError> {
+pub async fn update_cards(State(pool): State<PgPool>) -> Result<StatusCode, AppError> {
     sqlx::query(
         r#"
         UPDATE power_cards pc
@@ -165,7 +169,7 @@ pub async fn update_cards(
     .execute(&pool)
     .await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
 }
 
 // Implement the functions for every power card
@@ -178,9 +182,9 @@ pub struct WarlordsDomainPayload {
 }
 
 pub async fn warlords_domain(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Json(payload): extract::Json<WarlordsDomainPayload>,
-) -> Result<http::StatusCode, AppError> {
+    State(pool): State<PgPool>,
+    Json(payload): Json<WarlordsDomainPayload>,
+) -> Result<StatusCode, AppError> {
     sqlx::query(
         r#"
         WITH CurrentMatch AS (
@@ -211,13 +215,13 @@ pub async fn warlords_domain(
     .execute(&pool)
     .await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TwistOfFatePayload {
     user_id: uuid::Uuid,
-    selected_opponent_id: uuid::Uuid,
+    selected_user_id: uuid::Uuid,
 }
 
 // TODO: Negate the effect if either of the users have used Viral x Rival
@@ -225,9 +229,9 @@ pub struct TwistOfFatePayload {
 // Before doing the swap, check if user1 or user2 have an activated VxR
 // If they do, do not swap
 pub async fn twist_of_fate(
-    extract::State(pool): extract::State<PgPool>,
-    extract::Json(payload): extract::Json<TwistOfFatePayload>,
-) -> Result<http::StatusCode, AppError> {
+    State(pool): State<PgPool>,
+    Json(payload): Json<TwistOfFatePayload>,
+) -> Result<StatusCode, AppError> {
     sqlx::query(
         r#"
         WITH CurrentMatch AS (
@@ -272,9 +276,110 @@ pub async fn twist_of_fate(
     )
     .bind(payload.user_id)
     // .bind(payload.current_match_id)
-    .bind(payload.selected_opponent_id)
+    .bind(payload.selected_user_id)
     .execute(&pool)
     .await?;
 
-    Ok(http::StatusCode::OK)
+    Ok(StatusCode::OK)
+}
+
+pub async fn twist_of_fate2(
+    State(pool): State<PgPool>,
+    Json(payload): Json<TwistOfFatePayload>,
+) -> Result<StatusCode, AppError> {
+    let mut txn = pool.begin().await?;
+
+    let match_players = sqlx::query_as::<_, MatchPlayer>(
+        r#"
+        WITH CurrentMatch AS (
+            SELECT m.id, mp.user_id
+            FROM match_players mp
+            JOIN matches m ON m.id = mp.match_id 
+            WHERE mp.user_id = ($1)
+            ORDER BY m.created_at DESC
+            LIMIT 1
+        ),
+        CurrentOpponent AS (
+            SELECT mp.user_id 
+            FROM match_players mp 
+            JOIN CurrentMatch cm ON cm.id = mp.match_id
+            WHERE match_id = cm.id 
+            AND mp.user_id <> cm.user_id 
+            LIMIT 1
+        ),
+        SelectedMatch AS (
+            SELECT m.id, mp.user_id
+            FROM match_players mp
+            JOIN matches m ON m.id = mp.match_id 
+            WHERE mp.user_id = ($2)
+            ORDER BY m.created_at DESC
+            LIMIT 1
+        ),
+        SelectedUserOpponent AS (
+            SELECT mp.user_id 
+            FROM match_players mp 
+            JOIN SelectedMatch sm ON sm.id = mp.match_id
+            WHERE match_id = sm.id 
+            AND mp.user_id <> sm.user_id 
+            LIMIT 1
+        )
+
+        INSERT INTO match_players_og (user_id, match_id)
+        SELECT user_id, match_id FROM (
+            SELECT co.user_id, cm.id AS match_id FROM CurrentOpponent co, CurrentMatch cm
+            UNION ALL
+            SELECT suo.user_id, sm.id AS match_id FROM SelectedUserOpponent suo, SelectedMatch sm
+        ) AS subquery
+        RETURNING *
+        "#,
+    )
+    .bind(payload.user_id)
+    .bind(payload.selected_user_id)
+    .fetch_all(&mut *txn)
+    .await?;
+
+    println!("{:#?}", match_players);
+
+    // for player in match_players.iter() {
+    sqlx::query(
+        r#"
+           -- WITH SelectedUserOpponent AS (
+           --     SELECT user_id 
+           --     FROM match_players
+           --     WHERE match_id = ($2)
+           --         AND user_id <> ($1)
+           --     LIMIT 1
+           -- )
+            UPDATE match_players
+            SET user_id = ($1)
+            WHERE match_id = ($2)
+                AND user_id <> ($3)
+            "#,
+    )
+    .bind(&match_players[1].user_id)
+    .bind(&match_players[0].match_id)
+    .bind(&match_players[0].user_id)
+    .execute(&mut *txn)
+    .await?;
+
+    sqlx::query(
+        r#"
+            UPDATE match_players
+            SET user_id = ($1)
+            WHERE match_id = ($2)
+                AND user_id = ($3)
+            "#,
+    )
+    .bind(&match_players[0].user_id)
+    .bind(&match_players[1].match_id)
+    .bind(&match_players[1].user_id)
+    .execute(&mut *txn)
+    .await?;
+    // }
+
+    txn.commit().await?;
+
+    info!("Twist of Fate successful.");
+
+    Ok(StatusCode::OK)
 }

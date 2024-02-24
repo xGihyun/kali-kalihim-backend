@@ -1,6 +1,7 @@
 // NOTE: This is for testing only
 
 use axum::{extract::State, response::Result, Json};
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{prelude::FromRow, PgPool};
@@ -8,29 +9,47 @@ use tracing::{debug, info};
 
 use crate::error::AppError;
 
+#[derive(sqlx::Type, Debug, Serialize, Deserialize)]
+#[sqlx(type_name = "status")]
+#[sqlx(rename_all = "lowercase")]
+pub enum Status {
+    Pending,
+    Done,
+}
+
+#[derive(sqlx::Type, Debug, Serialize, Deserialize)]
+#[sqlx(type_name = "arnis_verdict")]
+#[sqlx(rename_all = "lowercase")]
+pub enum Verdict {
+    Win,
+    Lose,
+    Draw,
+    Pending,
+}
+
 #[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct Match {
     id: uuid::Uuid,
 
     created_at: chrono::DateTime<chrono::Utc>,
     card_deadline: chrono::DateTime<chrono::Utc>,
-    batch: u16,
+    batch: i16,
     section: String,
-    status: String,
+    status: Status,
     arnis_skill: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, FromRow)]
 pub struct MatchPlayer {
-    id: uuid::Uuid,
+    pub id: uuid::Uuid,
 
-    user_id: uuid::Uuid,
-    match_id: uuid::Uuid,
-    score: i16,
-    card_damage: i16,
-    arnis_verdict: String,
-    des_count: i16,
-    ap_count: i16,
+    pub user_id: uuid::Uuid,
+    pub match_id: uuid::Uuid,
+    pub score: i16,
+    pub card_damage: i16,
+    pub arnis_verdict: Verdict,
+    pub des_count: i16,
+    pub ap_count: i16,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -39,15 +58,15 @@ pub struct Matchmake {
 
     created_at: chrono::DateTime<chrono::Utc>,
     card_deadline: chrono::DateTime<chrono::Utc>,
-    batch: u16,
+    batch: i16,
     section: String,
-    status: String,
+    status: Status,
     arnis_skill: String,
-    players: Vec<MatchmakePlayer>,
+    users: Vec<MatchmakeUser>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct MatchmakePlayer {
+#[derive(Debug, Deserialize, Serialize, FromRow)]
+pub struct MatchmakeUser {
     id: uuid::Uuid,
     first_name: String,
     last_name: String,
@@ -118,7 +137,7 @@ pub async fn matchmake(
             JOIN ViralXRival vxr ON pm.user_id = vxr.user_id
         ),
         PersistedPairs AS (
-            SELECT * FROM PreviousMatch WHERE id IN (SELECT id FROM PersistedMatch) 
+            SELECT * FROM PreviousMatch WHERE id IN (SELECT id FROM PersistedMatches) 
         ),
         Players AS (
             SELECT id, first_name, last_name
@@ -128,7 +147,7 @@ pub async fn matchmake(
                 AND id NOT IN (SELECT user_id FROM PersistedPairs)
             ORDER BY RANDOM()
             LIMIT (SELECT CASE WHEN user_count >= 2 THEN 2 ELSE 0 END FROM UserCount)
-        )
+        ),
         Match AS (
             INSERT INTO matches (section, arnis_skill)
             VALUES (($1), ($2))
@@ -182,4 +201,172 @@ pub async fn matchmake(
     info!("Matchmaking successful.");
 
     Ok(Json(matches))
+}
+
+pub async fn matchmake2(
+    State(pool): State<PgPool>,
+    Json(payload): Json<MatchPayload>,
+) -> Result<Json<Vec<Matchmake>>, AppError> {
+    let mut txn = pool.begin().await?;
+
+    let user_ids = sqlx::query_scalar::<_, uuid::Uuid>(
+        r#"
+        WITH LatestMatch AS (
+            SELECT 
+                MAX(DATE_TRUNC('minute', created_at)) AS created_at,
+                COUNT(DISTINCT created_at) AS batch
+            FROM matches
+            WHERE section = ($1)
+        ),
+        PreviousMatch AS (
+            SELECT m.id, mp.user_id
+            FROM matches m
+            JOIN match_players mp ON mp.match_id = m.id
+            WHERE DATE_TRUNC('minute', m.created_at) = (SELECT created_at FROM LatestMatch)
+        ),
+        ViralXRival AS (
+            SELECT user_id
+            FROM power_cards
+            WHERE
+                name = 'Viral x Rival'
+                AND is_active = TRUE 
+                AND is_used = FALSE
+        ),
+        PersistedMatches AS (
+            SELECT
+                pm.id
+            FROM
+                PreviousMatch pm
+            JOIN ViralXRival vxr ON pm.user_id = vxr.user_id
+        ),
+        PersistedPairs AS (
+            SELECT * FROM PreviousMatch WHERE id IN (SELECT id FROM PersistedMatches) 
+        )
+        SELECT id FROM users 
+        WHERE section = ($1) 
+            AND role = 'user' 
+            AND id NOT IN (SELECT user_id FROM PersistedPairs)
+        "#,
+    )
+    .bind(payload.section.as_str())
+    .fetch_all(&mut *txn)
+    .await?;
+
+    let persisted_pairs = sqlx::query_scalar::<_, Vec<uuid::Uuid>>(
+        r#"
+        WITH LatestMatch AS (
+            SELECT 
+                MAX(DATE_TRUNC('minute', created_at)) AS created_at,
+                COUNT(DISTINCT created_at) AS batch
+            FROM matches
+            WHERE section = ($1)
+        ),
+        PreviousMatch AS (
+            SELECT m.id, mp.user_id
+            FROM matches m
+            JOIN match_players mp ON mp.match_id = m.id
+            WHERE DATE_TRUNC('minute', m.created_at) = (SELECT created_at FROM LatestMatch)
+        ),
+        ViralXRival AS (
+            SELECT user_id
+            FROM power_cards
+            WHERE
+                name = 'Viral x Rival'
+                AND is_active = TRUE 
+                AND is_used = FALSE
+        ),
+        PersistedMatches AS (
+            SELECT
+                pm.id
+            FROM
+                PreviousMatch pm
+            JOIN ViralXRival vxr ON pm.user_id = vxr.user_id
+        ),
+        PersistedPairs AS (
+            SELECT * FROM PreviousMatch WHERE id IN (SELECT id FROM PersistedMatches) 
+        )
+        SELECT array_agg(user_id)
+        FROM PreviousMatch 
+        WHERE user_id IN (SELECT user_id FROM PersistedPairs)
+        GROUP BY id;
+        "#,
+    )
+    .bind(payload.section.as_str())
+    .fetch_all(&mut *txn)
+    .await?;
+
+    let mut pairs = generate_pairs(user_ids);
+
+    pairs.extend(persisted_pairs);
+
+    let mut matches: Vec<Matchmake> = Vec::with_capacity(pairs.len());
+
+    for pair in pairs.iter() {
+        let new_match = sqlx::query_as::<_, Match>(
+            r#"
+            INSERT INTO matches (section, arnis_skill)
+            VALUES (($1), ($2))
+            RETURNING *
+            "#,
+        )
+        .bind(payload.section.as_str())
+        .bind(payload.skill.as_str())
+        .fetch_one(&mut *txn)
+        .await?;
+
+        let mut matchmake = Matchmake {
+            id: new_match.id,
+            arnis_skill: new_match.arnis_skill,
+            section: new_match.section,
+            batch: new_match.batch,
+            status: new_match.status,
+            created_at: new_match.created_at,
+            card_deadline: new_match.card_deadline,
+            users: Vec::with_capacity(2),
+        };
+
+        for user_id in pair.iter() {
+            let user = sqlx::query_as::<_, MatchmakeUser>(
+                r#"
+                INSERT INTO match_players (user_id, match_id)
+                VALUES (($1), ($2))
+                RETURNING user_id AS id,
+                    (SELECT first_name FROM users WHERE id = ($1)) AS first_name,
+                    (SELECT last_name FROM users WHERE id = ($1)) AS last_name;
+                "#,
+            )
+            .bind(user_id)
+            .bind(new_match.id)
+            .fetch_one(&mut *txn)
+            .await?;
+
+            matchmake.users.push(user);
+        }
+
+        matches.push(matchmake);
+    }
+
+    txn.commit().await?;
+
+    Ok(Json(matches))
+}
+
+fn generate_pairs(users: Vec<uuid::Uuid>) -> Vec<Vec<uuid::Uuid>> {
+    let mut matched_pairs = Vec::with_capacity(users.len() / 2);
+    let mut remaining_users = users;
+
+    // Shuffle the user IDs to randomize the matchmaking
+    remaining_users.shuffle(&mut rand::thread_rng());
+
+    // Pair up users until there are not enough users left
+    while remaining_users.len() >= 2 {
+        let mut pair = Vec::with_capacity(2);
+        for _ in 0..2 {
+            let user = remaining_users.pop().unwrap();
+            pair.push(user);
+        }
+        matched_pairs.push(pair);
+    }
+
+    matched_pairs
 }

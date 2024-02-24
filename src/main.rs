@@ -87,6 +87,8 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         )
         .route("/max_sets", get(matchmake::get_max_sets))
         .route("/matchmake", post(matchmake::matchmake))
+        .route("/matchmake-test", post(matches::matchmake))
+        .route("/matchmake-test2", post(matches::matchmake2))
         // Section
         .route(
             "/sections",
@@ -113,6 +115,10 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route(
             "/power_cards/twist_of_fate",
             patch(power_card::twist_of_fate),
+        )
+        .route(
+            "/power-cards/twist-of-fate",
+            post(power_card::twist_of_fate2),
         )
         // Card Battle
         .route(
