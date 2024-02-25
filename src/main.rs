@@ -59,15 +59,20 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             "/users/:user_id/private",
             patch(user::update_private_status),
         )
+        .route("/users/:user_id/matches", get(matches::get_user_matches))
+        .route(
+            "/users/:user_id/matches/opponent",
+            get(matches::get_opponent_data),
+        )
         .route("/users/count", get(user::get_users_count))
         // Could be way better
         .route("/users/update/column", post(user::update_column))
         .route("/scores", patch(score::update_score))
         // .route("/ranks", patch(score::update_ranks))
         // Matches
-        .route("/matches", get(matchmake::get_matches))
+        .route("/matches-legacy", get(matchmake::get_matches))
         .route(
-            "/matches/:match_set_id",
+            "/matches/:match_id",
             get(matchmake::get_match).patch(matchmake::update_match_status),
         )
         .route(
@@ -85,10 +90,9 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
             "/matches/latest/:user_id",
             get(matchmake::get_latest_opponent),
         )
-        .route("/max_sets", get(matchmake::get_max_sets))
+        .route("/max-sets", get(matchmake::get_max_sets))
         .route("/matchmake", post(matchmake::matchmake))
-        .route("/matchmake-test", post(matches::matchmake))
-        .route("/matchmake-test2", post(matches::matchmake2))
+        .route("/matches/matchmake", post(matches::matchmake))
         // Section
         .route(
             "/sections",
@@ -99,35 +103,35 @@ async fn main() -> anyhow::Result<(), anyhow::Error> {
         .route("/sections/count", get(section::get_sections_with_count))
         // Power Card
         .route(
-            "/power_cards",
+            "/power-cards",
             get(power_card::get_cards)
                 .post(power_card::insert_card)
                 .patch(power_card::update_cards),
         )
-        .route("/power_cards/:card_id", patch(power_card::update_card))
+        .route("/power-cards/:card_id", patch(power_card::update_card))
         // .route("/power_cards/update", post(power_card::update_card))
         // .route("/power_cards/insert", post(power_card::insert_card))
         // NOTE: These should be query params instead
         .route(
-            "/power_cards/warlords_domain",
+            "/power-cards/warlords-domain",
             patch(power_card::warlords_domain),
         )
         .route(
-            "/power_cards/twist_of_fate",
-            patch(power_card::twist_of_fate),
+            "/power-cards/twist_of_fate-legacy",
+            patch(power_card::twist_of_fate_legacy),
         )
         .route(
             "/power-cards/twist-of-fate",
-            post(power_card::twist_of_fate2),
+            post(power_card::twist_of_fate),
         )
         // Card Battle
         .route(
-            "/card_battle",
+            "/card-battle",
             get(card_battle::card_battle).post(card_battle::insert_cards),
         )
         .route(
-            "/card_battle/:match_set_id",
-            get(card_battle::get_match_results),
+            "/matches/:match_id/card-battle",
+            get(card_battle::get_results),
         )
         // Rubrics
         .route(

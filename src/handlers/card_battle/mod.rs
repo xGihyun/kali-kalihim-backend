@@ -1,5 +1,7 @@
 // NOTE: The code for this is VERY bad. I wrote this a few months ago and copy pasted it.
 
+use std::collections::HashMap;
+
 use axum::{extract, http, response::Result};
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
@@ -26,19 +28,19 @@ pub struct CardBattle {
     card_effect: Option<String>,
     damage: f32,
     is_cancelled: bool,
-    turn_number: i32,
-    match_set_id: uuid::Uuid,
+    turn_number: i16,
+    match_id: uuid::Uuid,
     user_id: uuid::Uuid,
 }
 
-pub async fn get_match_results(
+pub async fn get_results(
     extract::State(pool): extract::State<PgPool>,
-    extract::Path(match_set_id): extract::Path<uuid::Uuid>,
+    extract::Path(match_id): extract::Path<uuid::Uuid>,
 ) -> Result<axum::Json<Vec<CardBattle>>, AppError> {
     let card_battle = sqlx::query_as::<_, CardBattle>(
-        "SELECT * FROM card_battle_history WHERE match_set_id = ($1) ORDER BY user_id, turn_number",
+        "SELECT * FROM card_battle_history WHERE match_id = ($1) ORDER BY user_id, turn_number",
     )
-    .bind(match_set_id)
+    .bind(match_id)
     .fetch_all(&pool)
     .await?;
 
@@ -49,39 +51,42 @@ pub async fn insert_cards(
     extract::State(pool): extract::State<PgPool>,
     axum::Json(payload): axum::Json<Vec<CreateBattleCard>>,
 ) -> Result<http::StatusCode, AppError> {
+    info!("Inserting battle cards...");
+
     let mut txn = pool.begin().await?;
 
     for (i, card) in payload.into_iter().enumerate() {
         sqlx::query(
             r#"
-            WITH LatestMatch AS (
-                SELECT id
-                FROM match_sets
-                WHERE og_user1_id = ($3) OR og_user2_id = ($3)
-                ORDER BY created_at DESC
-                LIMIT 1 
+            WITH CurrentMatch AS (
+                SELECT m.id, mu.user_id
+                FROM match_users mu
+                JOIN matches m ON m.id = mu.match_id 
+                WHERE mu.user_id = ($3)
+                ORDER BY m.created_at DESC
+                LIMIT 1
             )
-            INSERT INTO battle_cards (name, skill, user_id, turn_number, match_set_id) 
+            INSERT INTO battle_cards (name, skill, user_id, turn_number, match_id) 
             SELECT 
                 ($1) AS name, 
                 ($2) AS skill, 
                 ($3) AS user_id, 
                 ($4) AS turn_number,
-                LatestMatch.id AS match_set_id
-            FROM LatestMatch
+                cm.id AS match_id
+            FROM CurrentMatch cm
             WHERE NOT EXISTS (
                 SELECT 1
                 FROM battle_cards
                 WHERE user_id = ($3)
-                  AND turn_number = ($4)
-                  AND match_set_id = LatestMatch.id
+                AND turn_number = ($4)
+                AND match_id = cm.id
             )
+            SELECT * FROM CurrentMatch
             "#,
         )
         .bind(card.name)
         .bind(card.skill)
         .bind(card.user_id)
-        // .bind(card.match_set_id)
         .bind(i as i16 + 1)
         .execute(&mut *txn)
         .await?;
@@ -89,25 +94,27 @@ pub async fn insert_cards(
 
     txn.commit().await?;
 
+    info!("Successfully inserted battle cards.");
+
     Ok(http::StatusCode::CREATED)
 }
 
 async fn get_cards(
     pool: &PgPool,
     user_id: &uuid::Uuid,
-    match_set_id: &uuid::Uuid,
+    match_id: &uuid::Uuid,
 ) -> Result<Vec<Option<Card>>, AppError> {
     let battle_cards_res = sqlx::query_as::<_, (String, String)>(
         r#"
         SELECT name, skill 
         FROM battle_cards 
-        WHERE user_id = ($1) AND match_set_id = ($2) 
+        WHERE user_id = ($1) AND match_id = ($2) 
         ORDER BY turn_number 
         LIMIT 6
         "#,
     )
     .bind(user_id)
-    .bind(match_set_id)
+    .bind(match_id)
     .fetch_all(pool)
     .await?;
 
@@ -145,24 +152,34 @@ async fn get_cards(
 pub async fn card_battle(
     extract::State(pool): extract::State<PgPool>,
     extract::Query(query): extract::Query<MatchQuery>,
-) -> Result<(), AppError> {
+) -> Result<http::StatusCode, AppError> {
     let mut txn = pool.begin().await?;
 
-    let matches = sqlx::query_as::<_, (uuid::Uuid, uuid::Uuid, uuid::Uuid)>(
-        r#"SELECT id, user1_id, user2_id FROM match_sets WHERE set = ($1) AND section = ($2)"#,
+    let matches_raw = sqlx::query_scalar::<_, (uuid::Uuid, uuid::Uuid)>(
+        r#"
+        SELECT m.id, mu.user_id FROM matches m 
+        JOIN match_users mu ON mu.match_id = m.id
+        WHERE m.batch = ($1)
+        "#,
     )
     .bind(query.set)
-    .bind(query.section)
     .fetch_all(&mut *txn)
     .await?;
 
-    for (i, (match_set_id, user1_id, user2_id)) in matches.iter().enumerate() {
-        info!("----- MATCH START -----");
-        info!("{match_set_id}");
+    let mut matches: HashMap<uuid::Uuid, Vec<uuid::Uuid>> = HashMap::new();
+
+    for (id, user_id) in matches_raw {
+        matches.entry(id).or_default().push(user_id);
+    }
+
+    for (i, (match_id, users)) in matches.iter().enumerate() {
+        info!("Running card battle: {}", match_id);
+
+        let (user1_id, user2_id) = (&users[0], &users[1]);
 
         // Each user can only have 6 cards
-        let user1_cards = get_cards(&pool, user1_id, match_set_id).await?;
-        let user2_cards = get_cards(&pool, user2_id, match_set_id).await?;
+        let user1_cards = get_cards(&pool, user1_id, match_id).await?;
+        let user2_cards = get_cards(&pool, user2_id, match_id).await?;
 
         let mut user1_turns: Vec<PlayerTurn> = vec![PlayerTurn::default(); NUMBER_OF_CARDS];
         let mut user2_turns: Vec<PlayerTurn> = vec![PlayerTurn::default(); NUMBER_OF_CARDS];
@@ -177,37 +194,37 @@ pub async fn card_battle(
             user2: (*user2_id, user2_turns),
         };
 
-        process_match_results(&pool, &battle_results, match_set_id).await?;
-        update_total_damage(&pool, match_set_id).await?;
+        process_match_results(&pool, &battle_results, match_id).await?;
+        update_total_damage(&pool, match_id).await?;
 
         // For debugging purposes
-        if i == 0 {
-            info!(">> User1: {}\n", user1_id);
-            info!("{:?}\n\n", battle_results.user1);
-            info!(">> User2: {}\n", user2_id);
-            info!("{:?}\n\n", battle_results.user2);
-        }
+        // if i == 0 {
+        //     info!(">> User1: {}", user1_id);
+        //     info!("{:#?}", battle_results.user1);
+        //     info!(">> User2: {}", user2_id);
+        //     info!("{:#?}", battle_results.user2);
+        // }
     }
 
-    Ok(())
+    Ok(http::StatusCode::OK)
 }
 
 // Could be improved
 // Could merge query with the query on process_match_results()
-async fn update_total_damage(pool: &PgPool, match_set_id: &uuid::Uuid) -> Result<(), AppError> {
+async fn update_total_damage(pool: &PgPool, match_id: &uuid::Uuid) -> Result<(), AppError> {
     sqlx::query(
         r#"
         WITH TotalDamage AS (
             SELECT
                 user_id,
-                match_set_id,
+                match_id,
                 SUM(damage) as total_damage 
             FROM
                 card_battle_history
             WHERE
-                match_set_id = ($1)
+                match_id = ($1)
             GROUP BY
-                user_id, match_set_id
+                user_id, match_id
         ), UpdateTotalDamage AS (
             UPDATE match_sets
             SET
@@ -228,7 +245,7 @@ async fn update_total_damage(pool: &PgPool, match_set_id: &uuid::Uuid) -> Result
         );
         "#,
     )
-    .bind(match_set_id)
+    .bind(match_id)
     .execute(pool)
     .await?;
 
@@ -238,13 +255,13 @@ async fn update_total_damage(pool: &PgPool, match_set_id: &uuid::Uuid) -> Result
 async fn process_match_results(
     pool: &PgPool,
     results: &PlayerTurnResults,
-    match_set_id: &uuid::Uuid,
+    match_id: &uuid::Uuid,
 ) -> Result<(), AppError> {
     let (user_id, turns) = results.user1.clone();
-    insert_turns(&user_id, turns, match_set_id, pool).await?;
+    insert_turns(&user_id, turns, match_id, pool).await?;
 
     let (user_id, turns) = results.user2.clone();
-    insert_turns(&user_id, turns, match_set_id, pool).await?;
+    insert_turns(&user_id, turns, match_id, pool).await?;
 
     Ok(())
 }
@@ -252,7 +269,7 @@ async fn process_match_results(
 async fn insert_turns(
     user_id: &uuid::Uuid,
     turns: Vec<PlayerTurn>,
-    match_set_id: &uuid::Uuid,
+    match_id: &uuid::Uuid,
     pool: &PgPool, // txn: &mut PgConnection,
 ) -> Result<(), AppError> {
     if turns[0].card_name.is_some() {
@@ -266,7 +283,7 @@ async fn insert_turns(
             damage,
             is_cancelled,
             turn_number,
-            match_set_id
+            match_id
         )
         SELECT
             ($1) AS user_id,
@@ -275,13 +292,13 @@ async fn insert_turns(
             ($4) AS damage,
             ($5) AS is_cancelled,
             ($6) AS turn_number,
-            ($7) AS match_set_id
+            ($7) AS match_id
         WHERE NOT EXISTS (
             SELECT 1
             FROM card_battle_history
             WHERE user_id = ($1)
               AND turn_number = ($6)
-              AND match_set_id = ($7)
+              AND match_id = ($7)
         )
     "#;
 
@@ -292,8 +309,8 @@ async fn insert_turns(
                 .bind(turn.card_effect)
                 .bind(turn.damage)
                 .bind(turn.is_cancelled)
-                .bind(i as i32 + 1)
-                .bind(match_set_id)
+                .bind(i as i16 + 1)
+                .bind(match_id)
                 .execute(&mut *txn)
                 .await?;
         }

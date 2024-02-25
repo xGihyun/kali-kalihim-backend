@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{prelude::FromRow, PgPool};
 use tracing::info;
 
-use super::matches::MatchPlayer;
+use super::matches::MatchUser;
 use super::user::UserId;
 
 #[derive(Debug, Deserialize, Serialize, FromRow)]
@@ -228,7 +228,7 @@ pub struct TwistOfFatePayload {
 // Make a CTE for Viral x Rival
 // Before doing the swap, check if user1 or user2 have an activated VxR
 // If they do, do not swap
-pub async fn twist_of_fate(
+pub async fn twist_of_fate_legacy(
     State(pool): State<PgPool>,
     Json(payload): Json<TwistOfFatePayload>,
 ) -> Result<StatusCode, AppError> {
@@ -283,99 +283,113 @@ pub async fn twist_of_fate(
     Ok(StatusCode::OK)
 }
 
-pub async fn twist_of_fate2(
+pub async fn twist_of_fate(
     State(pool): State<PgPool>,
     Json(payload): Json<TwistOfFatePayload>,
 ) -> Result<StatusCode, AppError> {
+    info!("Running Twist of Fate...");
+
     let mut txn = pool.begin().await?;
 
-    let match_players = sqlx::query_as::<_, MatchPlayer>(
+    sqlx::query(
         r#"
         WITH CurrentMatch AS (
-            SELECT m.id, mp.user_id
-            FROM match_players mp
-            JOIN matches m ON m.id = mp.match_id 
-            WHERE mp.user_id = ($1)
+            SELECT m.id, mu.user_id
+            FROM match_users mu
+            JOIN matches m ON m.id = mu.match_id 
+            WHERE mu.user_id = ($1)
             ORDER BY m.created_at DESC
             LIMIT 1
         ),
         CurrentOpponent AS (
-            SELECT mp.user_id 
-            FROM match_players mp 
-            JOIN CurrentMatch cm ON cm.id = mp.match_id
+            SELECT mu.*
+            FROM match_users mu 
+            JOIN CurrentMatch cm ON cm.id = mu.match_id
             WHERE match_id = cm.id 
-            AND mp.user_id <> cm.user_id 
+            AND mu.user_id <> cm.user_id 
             LIMIT 1
         ),
         SelectedMatch AS (
-            SELECT m.id, mp.user_id
-            FROM match_players mp
-            JOIN matches m ON m.id = mp.match_id 
-            WHERE mp.user_id = ($2)
+            SELECT m.id, mu.user_id
+            FROM match_users mu
+            JOIN matches m ON m.id = mu.match_id 
+            WHERE mu.user_id = ($2)
             ORDER BY m.created_at DESC
             LIMIT 1
         ),
-        SelectedUserOpponent AS (
-            SELECT mp.user_id 
-            FROM match_players mp 
-            JOIN SelectedMatch sm ON sm.id = mp.match_id
+        SelectedOpponent AS (
+            SELECT mu.*
+            FROM match_users mu 
+            JOIN SelectedMatch sm ON sm.id = mu.match_id
             WHERE match_id = sm.id 
-            AND mp.user_id <> sm.user_id 
+            AND mu.user_id = sm.user_id 
             LIMIT 1
         )
 
-        INSERT INTO match_players_og (user_id, match_id)
-        SELECT user_id, match_id FROM (
-            SELECT co.user_id, cm.id AS match_id FROM CurrentOpponent co, CurrentMatch cm
-            UNION ALL
-            SELECT suo.user_id, sm.id AS match_id FROM SelectedUserOpponent suo, SelectedMatch sm
-        ) AS subquery
-        RETURNING *
+        INSERT INTO match_users_og (user_id, match_id)
+        SELECT 
+            co.user_id,
+            cm.id AS match_id
+        FROM CurrentMatch cm
+        JOIN CurrentOpponent co ON cm.id = co.match_id
+
+        UNION ALL
+
+        SELECT 
+            so.user_id,
+            sm.id AS match_id
+        FROM SelectedMatch sm
+        JOIN SelectedOpponent so ON sm.id = so.match_id;
         "#,
     )
     .bind(payload.user_id)
     .bind(payload.selected_user_id)
-    .fetch_all(&mut *txn)
-    .await?;
-
-    println!("{:#?}", match_players);
-
-    // for player in match_players.iter() {
-    sqlx::query(
-        r#"
-           -- WITH SelectedUserOpponent AS (
-           --     SELECT user_id 
-           --     FROM match_players
-           --     WHERE match_id = ($2)
-           --         AND user_id <> ($1)
-           --     LIMIT 1
-           -- )
-            UPDATE match_players
-            SET user_id = ($1)
-            WHERE match_id = ($2)
-                AND user_id <> ($3)
-            "#,
-    )
-    .bind(&match_players[1].user_id)
-    .bind(&match_players[0].match_id)
-    .bind(&match_players[0].user_id)
     .execute(&mut *txn)
     .await?;
 
     sqlx::query(
         r#"
-            UPDATE match_players
-            SET user_id = ($1)
-            WHERE match_id = ($2)
-                AND user_id = ($3)
-            "#,
+        WITH CurrentMatch AS (
+            SELECT m.id, mu.user_id
+            FROM match_users mu
+            JOIN matches m ON m.id = mu.match_id 
+            WHERE mu.user_id = ($1)
+            ORDER BY m.created_at DESC
+            LIMIT 1
+        ),
+        CurrentOpponent AS (
+            SELECT mu.user_id AS id
+            FROM match_users mu 
+            JOIN CurrentMatch cm ON cm.id = mu.match_id
+            WHERE match_id = cm.id 
+            AND mu.user_id <> cm.user_id 
+            LIMIT 1
+        ),
+        SelectedMatch AS (
+            SELECT m.id, mu.user_id
+            FROM match_users mu
+            JOIN matches m ON m.id = mu.match_id 
+            WHERE mu.user_id = ($2)
+            ORDER BY m.created_at DESC
+            LIMIT 1
+        )
+
+        UPDATE match_users mu
+        SET user_id = 
+        CASE
+            WHEN (mu.match_id = cm.id AND mu.user_id = co.id) THEN sm.user_id
+            WHEN (mu.match_id = sm.id AND mu.user_id = sm.user_id) THEN co.id
+            ELSE mu.user_id
+        END
+        FROM SelectedMatch sm, CurrentMatch cm, CurrentOpponent co
+        WHERE (mu.match_id = cm.id)
+            OR (mu.match_id = sm.id)
+        "#,
     )
-    .bind(&match_players[0].user_id)
-    .bind(&match_players[1].match_id)
-    .bind(&match_players[1].user_id)
+    .bind(payload.user_id)
+    .bind(payload.selected_user_id)
     .execute(&mut *txn)
     .await?;
-    // }
 
     txn.commit().await?;
 
