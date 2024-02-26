@@ -41,6 +41,7 @@ pub struct Match {
     section: String,
     status: Status,
     arnis_skill: String,
+    comment: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, FromRow, Clone)]
@@ -61,6 +62,8 @@ pub struct MatchUserClient {
     id: uuid::Uuid,
 
     user_id: uuid::Uuid,
+    first_name: String,
+    last_name: String,
     match_id: uuid::Uuid,
     score: i16,
     card_damage: i16,
@@ -81,6 +84,7 @@ pub struct MatchClient {
     status: Status,
     arnis_skill: String,
     users: Vec<MatchUserClient>,
+    comment: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -134,31 +138,30 @@ pub async fn get_user_matches(
     .fetch_all(&mut *txn)
     .await?;
 
-    let match_user_og = sqlx::query_as::<_, MatchUser>(
+    let match_users = sqlx::query_as::<_, MatchUserClient>(
         r#"
         WITH UserMatches AS (
-            SELECT match_id, created_at FROM matches m 
+            SELECT match_id, created_at 
+            FROM matches m 
             JOIN match_users mu ON mu.match_id = m.id
             WHERE mu.user_id = ($1)
-        )
-        SELECT * FROM match_users_og muo
-        JOIN UserMatches um ON muo.match_id = um.match_id
-        ORDER BY um.created_at DESC
-        "#,
-    )
-    .bind(user_id)
-    .fetch_optional(&mut *txn)
-    .await?;
+        ),
+        PreviousMatches AS (
+            SELECT muo.*, u.first_name, u.last_name, TRUE AS is_swapped 
+            FROM match_users_og muo
+            JOIN UserMatches um ON muo.match_id = um.match_id
+            JOIN users u ON u.id = muo.user_id
 
-    let match_users = sqlx::query_as::<_, MatchUser>(
-        r#"
-        WITH UserMatches AS (
-            SELECT match_id, created_at FROM matches m 
-            JOIN match_users mu ON mu.match_id = m.id
-            WHERE mu.user_id = ($1)
+            UNION
+
+            SELECT mu.*, u.first_name, u.last_name, FALSE AS is_swapped 
+            FROM match_users mu
+            JOIN UserMatches um ON mu.match_id = um.match_id
+            JOIN users u ON u.id = mu.user_id
         )
-        SELECT * FROM match_users mu
-        JOIN UserMatches um ON mu.match_id = um.match_id
+
+        SELECT * FROM PreviousMatches pm
+        JOIN UserMatches um ON um.match_id = pm.match_id
         ORDER BY um.created_at DESC
         "#,
     )
@@ -169,39 +172,11 @@ pub async fn get_user_matches(
     let mut matches_client: Vec<MatchClient> = Vec::with_capacity(matches.len());
 
     matches_client.extend(matches.iter().map(|m| {
-        let mut user_clients = match_users
-            .iter()
-            .map(|mu| MatchUserClient {
-                user_id: mu.user_id,
-                des_count: mu.des_count,
-                id: mu.id,
-                match_id: mu.match_id,
-                score: mu.score,
-                ap_count: mu.ap_count,
-                card_damage: mu.card_damage,
-                arnis_verdict: mu.arnis_verdict.clone(),
-                is_swapped: false,
-            })
+        let match_users = match_users
+            .clone()
+            .into_iter()
             .filter(|mu| mu.match_id == m.id)
-            .collect::<Vec<MatchUserClient>>();
-
-        if let Some(muo) = match_user_og.clone() {
-            if muo.match_id == m.id {
-                let og_user = MatchUserClient {
-                    user_id: muo.user_id,
-                    des_count: muo.des_count,
-                    id: muo.id,
-                    match_id: muo.match_id,
-                    score: muo.score,
-                    ap_count: muo.ap_count,
-                    card_damage: muo.card_damage,
-                    arnis_verdict: muo.arnis_verdict,
-                    is_swapped: true,
-                };
-
-                user_clients.push(og_user);
-            }
-        }
+            .collect();
 
         MatchClient {
             id: m.id,
@@ -211,7 +186,8 @@ pub async fn get_user_matches(
             created_at: m.created_at,
             arnis_skill: m.arnis_skill.clone(),
             card_deadline: m.card_deadline,
-            users: user_clients,
+            comment: m.comment.clone(),
+            users: match_users,
         }
     }));
 
