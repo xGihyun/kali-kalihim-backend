@@ -5,6 +5,7 @@ use serde::Deserialize;
 use sqlx::prelude::FromRow;
 use sqlx::PgPool;
 use tracing::debug;
+use tracing::info;
 
 use crate::error::AppError;
 use crate::handlers::badge::BadgeType;
@@ -81,6 +82,8 @@ pub async fn update_score(
 
         let skill_badge = SkillBadge::new(skill.as_str());
         let badge_info = BadgeType::info(BadgeType::BestInSkill(skill_badge))?;
+
+        info!("Adding badge: {}", badge_info.name);
 
         sqlx::query(
             r#"
