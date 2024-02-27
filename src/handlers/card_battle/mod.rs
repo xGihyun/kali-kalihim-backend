@@ -26,7 +26,7 @@ pub struct CardBattle {
     card_effect: Option<String>,
     damage: f32,
     is_cancelled: bool,
-    turn_number: i32,
+    turn_number: i16,
     match_set_id: uuid::Uuid,
     user_id: uuid::Uuid,
 }
@@ -188,6 +188,8 @@ pub async fn card_battle(
             info!("{:?}\n\n", battle_results.user2);
         }
     }
+
+    txn.commit().await?;
 
     Ok(())
 }
