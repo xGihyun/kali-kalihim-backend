@@ -75,7 +75,7 @@ impl BadgeType {
             "Uncrowned Kings/Queens" => Self::TopPlayer,
             "Offensive Prodigy" => Self::BestInSkill(SkillBadge::new("strikes")),
             "Defense Juggernaut" => Self::BestInSkill(SkillBadge::new("blocks")),
-            "Weaving Master" => Self::BestInSkill(SkillBadge::new("forward_sinawali")),
+            "Weaving Master" => Self::BestInSkill(SkillBadge::new("sinawali")),
             _ => Self::Unknown,
         }
     }
@@ -114,7 +114,7 @@ impl SkillBadge {
                 name: String::from("Defense Juggernaut"),
                 description: String::from("Best in Blocks."),
             }),
-            "forward_sinawali" | "sinawali_variation" => Self::Sinawali(BadgeInfo {
+            "sinawali" => Self::Sinawali(BadgeInfo {
                 name: String::from("Weaving Master"),
                 description: String::from("Best in Sinawali."),
             }),
